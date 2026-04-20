@@ -59,22 +59,29 @@ def listar_pedidos(db: Session = Depends(get_db)):
 
 # --- RUTA WEBHOOK (Para WhatsApp) ---
 
+# --- RUTA WEBHOOK (Para WhatsApp) - MODO DEBUG ---
+
 @app.get("/webhook")
 async def verificar_webhook(request: Request):
-    # Obtenemos el token desde las variables de entorno
-    verify_token = os.getenv("VERIFY_TOKEN")
+    # 1. Obtener el token de las variables de entorno
+    token_servidor = os.getenv("VERIFY_TOKEN")
     
-    # Parámetros que envía Meta
+    # 2. Obtener lo que envía Meta
     mode = request.query_params.get("hub.mode")
-    token = request.query_params.get("hub.verify_token")
+    token_meta = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
 
-    # Verificación
-    if mode == "subscribe" and token == verify_token:
-        # Devolvemos el challenge tal cual, sin convertirlo a int, solo como texto
+    # 3. Imprimir en los logs de Railway para que tú puedas ver qué pasa
+    print(f"DEBUG: Meta envió modo: {mode}")
+    print(f"DEBUG: Meta envió token: {token_meta}")
+    print(f"DEBUG: Token guardado en Railway: {token_servidor}")
+
+    # 4. Verificación
+    if mode == "subscribe" and token_meta == token_servidor:
+        print("DEBUG: ¡ÉXITO! Los tokens coinciden.")
         return PlainTextResponse(content=challenge, status_code=200)
     
-    # Si algo falla, devolvemos error 403
+    print("DEBUG: ¡ERROR! Los tokens NO coinciden o el modo es incorrecto.")
     raise HTTPException(status_code=403, detail="Token de verificación inválido")
 
 @app.post("/webhook")
