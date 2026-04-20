@@ -154,6 +154,7 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
             if cliente.bot_activo == False:
                 print(f"🤫 Artie en silencio. El cliente {numero_cliente} está en manos de un humano.")
                 return {"status": "ok"}
+                
             # --- NUEVO: PALABRAS CLAVE DE REINICIO ---
             palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
             if texto_cliente in palabras_reinicio:
@@ -209,6 +210,20 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 else:
                     respuesta = "No logré entender la cantidad 😅. Por favor, escríbela con números (ej: 60, o 1 docena)."
                     await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+
+            # --- NUEVO BLOQUE: PIDIENDO EL LOGO ---
+            elif cliente.paso_embudo == "pidiendo_color":
+                color_elegido = texto_cliente.title()
+                
+                respuesta = f"¡El {color_elegido} es una gran elección! ✨\n\n"
+                respuesta += "Ahora, la parte más importante: *Tu Marca.*\n"
+                respuesta += "👉 *Envía la FOTO de tu LOGO aquí.*\n\n"
+                respuesta += "*(Con esto haremos un \"Pre-diseño Digital\" para que apruebes cómo se ve antes de fabricar).*"
+                
+                await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                
+                cliente.paso_embudo = "pidiendo_logo"
+                db.commit()
             
     except Exception as e:
         print(f"Error procesando el webhook: {e}")
