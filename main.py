@@ -87,7 +87,55 @@ async def verificar_webhook(request: Request):
 @app.post("/webhook")
 async def recibir_mensajes(request: Request):
     data = await request.json()
-    # Aquí se imprimirán los mensajes que lleguen de WhatsApp en los logs de Railway
     print("=== NUEVO EVENTO DE WHATSAPP ===")
-    print(data) 
+    
+    try:
+        # 1. Navegar por el JSON para extraer los datos vitales
+        entry = data.get("entry", [])[0]
+        changes = entry.get("changes", [])[0]
+        value = changes.get("value", {})
+        
+        # 2. Verificar si es un mensaje de texto (y no una confirmación de lectura)
+        if "messages" in value:
+            mensaje_info = value["messages"][0]
+            numero_cliente = mensaje_info["from"]
+            texto_cliente = mensaje_info["text"]["body"]
+            
+            print(f"✅ Mensaje recibido de {numero_cliente}: {texto_cliente}")
+            
+            # 3. Enviar respuesta automática a ese mismo número
+            respuesta = "¡Hola! Soy Artie 🤖. Mi creador Allan me acaba de encender. ¡Pronto estaré procesando tus pedidos para la lavandería!"
+            await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+            
+    except Exception as e:
+        print(f"Error procesando el mensaje o es un evento distinto: {e}")
+        
+    # Siempre debemos responder 200 OK a Meta rápido para que no nos bloquee
     return {"status": "ok"}
+
+# --- MOTOR DE ENVÍO DE MENSAJES ---
+async def enviar_mensaje_whatsapp(numero_destino: str, texto: str):
+    token = os.getenv("WHATSAPP_TOKEN")
+    phone_id = os.getenv("PHONE_NUMBER_ID")
+    
+    # URL oficial de la API de Meta (Usando v25.0 como en tu panel)
+    url = f"https://graph.facebook.com/v25.0/{phone_id}/messages"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": numero_destino,
+        "type": "text",
+        "text": {"body": texto}
+    }
+    
+    # Usamos httpx para hacer la petición web a los servidores de Meta
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, headers=headers, json=payload)
+        print(f"Estado de envío a Meta: {response.status_code}")
+        if response.status_code != 200:
+            print("Error detallado de Meta:", response.json())
