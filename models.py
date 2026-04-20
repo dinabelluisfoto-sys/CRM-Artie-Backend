@@ -9,6 +9,9 @@ class Cliente(Base):
     nombre = Column(String, nullable=False)
     telefono = Column(String, unique=True, index=True, nullable=False)
     nit = Column(String, default="CF")
+    # --- NUEVOS CAMPOS PARA ARTIE ---
+    bot_activo = Column(Boolean, default=True) # El Switch ON/OFF
+    paso_embudo = Column(String, default="inicio") # Memoria de la plática
 
 class Producto(Base):
     __tablename__ = "productos"

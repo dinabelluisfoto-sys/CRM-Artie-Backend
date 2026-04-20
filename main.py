@@ -85,32 +85,74 @@ async def verificar_webhook(request: Request):
     raise HTTPException(status_code=403, detail="Token de verificación inválido")
 
 @app.post("/webhook")
-async def recibir_mensajes(request: Request):
+async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
     data = await request.json()
-    print("=== NUEVO EVENTO DE WHATSAPP ===")
     
     try:
-        # 1. Navegar por el JSON para extraer los datos vitales
         entry = data.get("entry", [])[0]
         changes = entry.get("changes", [])[0]
         value = changes.get("value", {})
         
-        # 2. Verificar si es un mensaje de texto (y no una confirmación de lectura)
+        # Si recibimos un mensaje válido
         if "messages" in value:
             mensaje_info = value["messages"][0]
             numero_cliente = mensaje_info["from"]
-            texto_cliente = mensaje_info["text"]["body"]
             
-            print(f"✅ Mensaje recibido de {numero_cliente}: {texto_cliente}")
+            # Extraemos el texto (si mandan imagen u otra cosa, evitamos que truene)
+            texto_cliente = mensaje_info.get("text", {}).get("body", "").strip().lower()
             
-            # 3. Enviar respuesta automática a ese mismo número
-            respuesta = "¡Hola! Soy Artie 🤖. Mi creador Allan me acaba de encender. ¡Pronto estaré procesando tus pedidos para la lavandería!"
-            await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+            # 1. Buscar a este número en nuestra base de datos
+            cliente = db.query(models.Cliente).filter(models.Cliente.telefono == numero_cliente).first()
+            
+            # 2. Si no existe, es un lead nuevo, lo guardamos
+            if not cliente:
+                cliente = models.Cliente(
+                    nombre="Pendiente", 
+                    telefono=numero_cliente, 
+                    nit="CF", 
+                    bot_activo=True, 
+                    paso_embudo="inicio"
+                )
+                db.add(cliente)
+                db.commit()
+                db.refresh(cliente)
+                
+            # 3. EL BOTÓN DE PÁNICO (Fase 2 de tu estrategia)
+            # Si el humano apagó a Artie desde Flet, ignoramos el mensaje
+            if cliente.bot_activo == False:
+                print(f"🤫 Artie en silencio. El cliente {numero_cliente} está en manos de un humano.")
+                return {"status": "ok"}
+                
+            # 4. EL EMBUDO DE VENTAS (Fase 1)
+            if cliente.paso_embudo == "inicio":
+                respuesta = "¡Hola! 👋 Bienvenido a La Sanjuanerita. Soy Artie, tu asistente virtual.\n\n¿Listo para destacar tu marca?\n1️⃣ Iniciar mi Pedido\n2️⃣ Ver Precios y Ofertas\n\n*(Responde con el número)*"
+                await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                
+                # Le decimos a la memoria que ya saludamos y estamos esperando opción
+                cliente.paso_embudo = "esperando_opcion"
+                db.commit()
+                
+            elif cliente.paso_embudo == "esperando_opcion":
+                if texto_cliente == "1":
+                    respuesta = "¡Excelente decisión! ✨\n\nPara calcular tu mejor precio, **¿cuántas gorras tienes en mente?**\n*(Ej: 1 Docena, 50 unidades, 1 Ciento...)*"
+                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                    
+                    # Avanzamos el embudo
+                    cliente.paso_embudo = "pidiendo_cantidad"
+                    db.commit()
+                elif texto_cliente == "2":
+                    respuesta = "Actualmente manejamos Gorras Trucker desde Q.17.99 c/u (precio mayorista). ¿Deseas iniciar tu pedido respondiendo '1'?"
+                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                else:
+                    # Manejo de error suave
+                    respuesta = "Por favor, responde únicamente con el número 1 o 2 para continuar."
+                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                    
+            # (Aquí iremos agregando los demás pasos: pidiendo_cantidad, pidiendo_color, etc.)
             
     except Exception as e:
-        print(f"Error procesando el mensaje o es un evento distinto: {e}")
+        print(f"Error procesando el webhook: {e}")
         
-    # Siempre debemos responder 200 OK a Meta rápido para que no nos bloquee
     return {"status": "ok"}
 
 # --- MOTOR DE ENVÍO DE MENSAJES ---
