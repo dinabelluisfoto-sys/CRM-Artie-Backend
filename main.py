@@ -1,18 +1,17 @@
 import os
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
+from typing import List
+
 from database import engine, get_db
 import models, schemas
-from typing import List
 
 # Asegurarnos de que las tablas existan
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="API CRM Artie", description="Motor de gestión de pedidos con WhatsApp", version="1.2.0")
-
-# --- CONFIGURACIÓN ---
-VERIFY_TOKEN = "artie_secret_token_12345" # Cámbialo por algo único
 
 # --- RUTAS DE CRM (Clientes y Pedidos) ---
 
@@ -36,7 +35,10 @@ def crear_pedido(pedido: schemas.PedidoCreate, db: Session = Depends(get_db)):
     cliente = db.query(models.Cliente).filter(models.Cliente.id == pedido.cliente_id).first()
     if not cliente:
         raise HTTPException(status_code=404, detail="Cliente no encontrado.")
+    
+    # Cálculo del total
     total = (pedido.cantidad * 17.99) + 47.00
+    
     nuevo_pedido = models.Pedido(
         cliente_id=pedido.cliente_id,
         cantidad=pedido.cantidad,
@@ -55,16 +57,33 @@ def listar_pedidos(db: Session = Depends(get_db)):
 
 # --- RUTA WEBHOOK (Para WhatsApp) ---
 
-@app.get("/webhook/")
-async def verify_webhook(request: Request):
-    query_params = request.query_params
-    if query_params.get("hub.mode") == "subscribe" and query_params.get("hub.verify_token") == VERIFY_TOKEN:
-        return int(query_params.get("hub.challenge"))
-    raise HTTPException(status_code=403, detail="Token de verificación inválido")
+@app.get("/webhook")
+async def verificar_webhook(request: Request):
+    # Extraemos el token desde las variables de entorno, con un respaldo por seguridad
+    verify_token = os.getenv("VERIFY_TOKEN", "artie_secret_token_12345") 
+    
+    # Meta envía estos datos en la URL
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
 
-@app.post("/webhook/")
-async def handle_webhook(request: Request):
+    # Si hay una petición de verificación
+    if mode and token:
+        # Si el token coincide con nuestro artie_secret_token_12345
+        if mode == "subscribe" and token == verify_token:
+            print("WEBHOOK VERIFICADO CORRECTAMENTE")
+            # CRÍTICO: Devolvemos el "challenge" como texto plano
+            return PlainTextResponse(content=challenge)
+        else:
+            # Si el token no coincide, bloqueamos el paso
+            raise HTTPException(status_code=403, detail="Token de verificación incorrecto")
+            
+    raise HTTPException(status_code=400, detail="Faltan parámetros")
+
+@app.post("/webhook")
+async def recibir_mensajes(request: Request):
     data = await request.json()
-    # Aquí imprimirás los mensajes que lleguen de WhatsApp
+    # Aquí se imprimirán los mensajes que lleguen de WhatsApp en los logs de Railway
+    print("=== NUEVO EVENTO DE WHATSAPP ===")
     print(data) 
     return {"status": "ok"}
