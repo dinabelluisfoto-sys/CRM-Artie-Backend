@@ -57,28 +57,25 @@ def listar_pedidos(db: Session = Depends(get_db)):
 
 # --- RUTA WEBHOOK (Para WhatsApp) ---
 
+# --- RUTA WEBHOOK (Para WhatsApp) ---
+
 @app.get("/webhook")
 async def verificar_webhook(request: Request):
-    # Extraemos el token desde las variables de entorno, con un respaldo por seguridad
-    verify_token = os.getenv("VERIFY_TOKEN", "artie_secret_token_12345") 
+    # Obtenemos el token desde las variables de entorno
+    verify_token = os.getenv("VERIFY_TOKEN")
     
-    # Meta envía estos datos en la URL
+    # Parámetros que envía Meta
     mode = request.query_params.get("hub.mode")
     token = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
 
-    # Si hay una petición de verificación
-    if mode and token:
-        # Si el token coincide con nuestro artie_secret_token_12345
-        if mode == "subscribe" and token == verify_token:
-            print("WEBHOOK VERIFICADO CORRECTAMENTE")
-            # CRÍTICO: Devolvemos el "challenge" como texto plano
-            return PlainTextResponse(content=challenge)
-        else:
-            # Si el token no coincide, bloqueamos el paso
-            raise HTTPException(status_code=403, detail="Token de verificación incorrecto")
-            
-    raise HTTPException(status_code=400, detail="Faltan parámetros")
+    # Verificación
+    if mode == "subscribe" and token == verify_token:
+        # Devolvemos el challenge tal cual, sin convertirlo a int, solo como texto
+        return PlainTextResponse(content=challenge, status_code=200)
+    
+    # Si algo falla, devolvemos error 403
+    raise HTTPException(status_code=403, detail="Token de verificación inválido")
 
 @app.post("/webhook")
 async def recibir_mensajes(request: Request):
