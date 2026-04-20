@@ -140,9 +140,8 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 db.commit()
                 db.refresh(cliente)
                 
-            # EL BOTÓN DE PÁNICO (Evita que el bot responda si está apagado)
+            # EL BOTÓN DE PÁNICO
             if cliente.bot_activo == False:
-                # OJO: Aquí el mensaje llega a tu Flet, pero Artie se queda callado
                 print(f"🤫 Artie en silencio. Mensaje de {numero_cliente} para el agente humano.")
                 return {"status": "ok"}
                 
@@ -152,7 +151,7 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 cliente.paso_embudo = "inicio"
                 db.commit()
                 
-            # --- EMBUDO DE VENTAS COMPLETO ---
+            # --- EMBUDO DE VENTAS ---
             if cliente.paso_embudo == "inicio":
                 respuesta = "¡Hola! 👋 Bienvenido a La Sanjuanerita. Soy Artie, tu asistente virtual.\n\n¿Listo para destacar tu marca?\n1️⃣ Iniciar mi Pedido\n2️⃣ Ver Precios y Ofertas\n\n*(Responde con el número)*"
                 await enviar_mensaje_whatsapp(numero_cliente, respuesta)
@@ -216,35 +215,35 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                     respuesta = "Aún no detecto la imagen 🤔. Por favor, usa el ícono del clip 📎 o cámara para enviarme la foto de tu logo."
                     await enviar_mensaje_whatsapp(numero_cliente, respuesta)
                     
-            # --- LA RECTA FINAL ---
             elif cliente.paso_embudo == "pidiendo_nombre":
-                # Guardamos el nombre capitalizado correctamente
                 cliente.nombre = texto_cliente.title()
-                
                 respuesta = f"Un gusto, {cliente.nombre}. 🤝\n📞 **¿A qué número de teléfono te podemos llamar para confirmar el diseño?**"
                 await enviar_mensaje_whatsapp(numero_cliente, respuesta)
-                
                 cliente.paso_embudo = "pidiendo_telefono"
                 db.commit()
                 
+            # --- NUEVO: VALIDACIÓN ESTRICTA DE 8 DÍGITOS ---
             elif cliente.paso_embudo == "pidiendo_telefono":
-                # Aquí asume que te enviaron el teléfono
-                respuesta = "Anotado. 📝\nPor último: **¿Cuál es tu NIT para la factura?**\n*(Escribe CF si no tienes)*"
-                await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                # Limpiamos el texto para dejar solo los números (ignora guiones, letras o espacios)
+                numero_limpio = re.sub(r'\D', '', texto_cliente)
                 
-                cliente.paso_embudo = "pidiendo_nit"
-                db.commit()
+                if len(numero_limpio) == 8:
+                    respuesta = "Anotado. 📝\nPor último: **¿Cuál es tu NIT para la factura?**\n*(Escribe CF si no tienes)*"
+                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                    
+                    cliente.paso_embudo = "pidiendo_nit"
+                    db.commit()
+                else:
+                    # Si no tiene 8 dígitos exactos, se queda en este paso y le pide que lo intente de nuevo
+                    respuesta = "Ese número no parece tener la cantidad correcta 🤔.\n\nPor favor, escribe un número de teléfono válido de **8 dígitos** para que no haya problemas con tu entrega."
+                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
                 
             elif cliente.paso_embudo == "pidiendo_nit":
-                # Guardamos el NIT en mayúsculas
                 cliente.nit = texto_cliente.upper()
-                
-                # ¡MAGIA! Apagamos el bot para este cliente
                 cliente.bot_activo = False
                 cliente.paso_embudo = "completado"
                 db.commit()
                 
-                # Mensaje de Cierre
                 respuesta = "🎉 **¡Pedido Confirmado Exitosamente!**\n\n"
                 respuesta += "📦 *Estado:* Orden registrada y enviada a mesa de diseño.\n"
                 respuesta += "💳 *Método de Pago:* Contra-entrega.\n\n"
