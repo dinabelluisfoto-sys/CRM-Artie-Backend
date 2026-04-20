@@ -4,7 +4,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 from typing import List
-import re # Para extraer números del texto
+import re 
 
 from database import engine, get_db
 import models, schemas
@@ -117,7 +117,6 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
             mensaje_info = value["messages"][0]
             numero_cliente = mensaje_info["from"]
             
-            # DETECCIÓN DE IMAGEN O TEXTO
             tipo_mensaje = mensaje_info.get("type")
             texto_cliente = ""
             
@@ -140,16 +139,17 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 db.commit()
                 db.refresh(cliente)
                 
+            # --- NUEVO: EL DESPERTADOR DE ARTIE (Debe ir antes de revisar si está apagado) ---
+            palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
+            if texto_cliente in palabras_reinicio:
+                cliente.bot_activo = True  # ¡Despertamos a Artie!
+                cliente.paso_embudo = "inicio"
+                db.commit()
+                
             # EL BOTÓN DE PÁNICO
             if cliente.bot_activo == False:
                 print(f"🤫 Artie en silencio. Mensaje de {numero_cliente} para el agente humano.")
                 return {"status": "ok"}
-                
-            # PALABRAS CLAVE DE REINICIO
-            palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
-            if texto_cliente in palabras_reinicio:
-                cliente.paso_embudo = "inicio"
-                db.commit()
                 
             # --- EMBUDO DE VENTAS ---
             if cliente.paso_embudo == "inicio":
@@ -222,9 +222,7 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 cliente.paso_embudo = "pidiendo_telefono"
                 db.commit()
                 
-            # --- NUEVO: VALIDACIÓN ESTRICTA DE 8 DÍGITOS ---
             elif cliente.paso_embudo == "pidiendo_telefono":
-                # Limpiamos el texto para dejar solo los números (ignora guiones, letras o espacios)
                 numero_limpio = re.sub(r'\D', '', texto_cliente)
                 
                 if len(numero_limpio) == 8:
@@ -234,7 +232,6 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                     cliente.paso_embudo = "pidiendo_nit"
                     db.commit()
                 else:
-                    # Si no tiene 8 dígitos exactos, se queda en este paso y le pide que lo intente de nuevo
                     respuesta = "Ese número no parece tener la cantidad correcta 🤔.\n\nPor favor, escribe un número de teléfono válido de **8 dígitos** para que no haya problemas con tu entrega."
                     await enviar_mensaje_whatsapp(numero_cliente, respuesta)
                 
