@@ -96,20 +96,16 @@ def listar_pedidos(db: Session = Depends(get_db)):
 
 @app.get("/webhook")
 async def verificar_webhook(request: Request):
-    # 1. Obtener el token de las variables de entorno
     token_servidor = os.getenv("VERIFY_TOKEN")
     
-    # 2. Obtener lo que envía Meta
     mode = request.query_params.get("hub.mode")
     token_meta = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
 
-    # 3. Imprimir en los logs de Railway
     print(f"DEBUG: Meta envió modo: {mode}")
     print(f"DEBUG: Meta envió token: {token_meta}")
     print(f"DEBUG: Token guardado en Railway: {token_servidor}")
 
-    # 4. Verificación
     if mode == "subscribe" and token_meta == token_servidor:
         print("DEBUG: ¡ÉXITO! Los tokens coinciden.")
         return PlainTextResponse(content=challenge, status_code=200)
@@ -126,18 +122,23 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
         changes = entry.get("changes", [])[0]
         value = changes.get("value", {})
         
-        # Si recibimos un mensaje válido
         if "messages" in value:
             mensaje_info = value["messages"][0]
             numero_cliente = mensaje_info["from"]
             
-            # Extraemos el texto (si mandan imagen u otra cosa, evitamos que truene)
-            texto_cliente = mensaje_info.get("text", {}).get("body", "").strip().lower()
+            # --- NUEVO: DETECCIÓN DE IMAGEN O TEXTO ---
+            tipo_mensaje = mensaje_info.get("type")
+            texto_cliente = ""
             
-            # 1. Buscar a este número en nuestra base de datos
+            if tipo_mensaje == "text":
+                texto_cliente = mensaje_info.get("text", {}).get("body", "").strip().lower()
+            elif tipo_mensaje == "image":
+                texto_cliente = "[imagen]" # Etiqueta interna para saber que mandó foto
+            
+            # 1. Buscar a este número
             cliente = db.query(models.Cliente).filter(models.Cliente.telefono == numero_cliente).first()
             
-            # 2. Si no existe, es un lead nuevo, lo guardamos
+            # 2. Si no existe, crearlo
             if not cliente:
                 cliente = models.Cliente(
                     nombre="Pendiente", 
@@ -150,19 +151,18 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 db.commit()
                 db.refresh(cliente)
                 
-            # 3. EL BOTÓN DE PÁNICO (Fase 2 de tu estrategia)
+            # 3. EL BOTÓN DE PÁNICO
             if cliente.bot_activo == False:
                 print(f"🤫 Artie en silencio. El cliente {numero_cliente} está en manos de un humano.")
                 return {"status": "ok"}
                 
-            # --- NUEVO: PALABRAS CLAVE DE REINICIO ---
+            # PALABRAS CLAVE DE REINICIO
             palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
             if texto_cliente in palabras_reinicio:
                 cliente.paso_embudo = "inicio"
                 db.commit()
-                # Al cambiarlo a "inicio", el código seguirá hacia abajo y mostrará el menú principal
                 
-            # 4. EL EMBUDO DE VENTAS (Fase 1)
+            # 4. EL EMBUDO DE VENTAS
             if cliente.paso_embudo == "inicio":
                 respuesta = "¡Hola! 👋 Bienvenido a La Sanjuanerita. Soy Artie, tu asistente virtual.\n\n¿Listo para destacar tu marca?\n1️⃣ Iniciar mi Pedido\n2️⃣ Ver Precios y Ofertas\n\n*(Responde con el número)*"
                 await enviar_mensaje_whatsapp(numero_cliente, respuesta)
@@ -190,7 +190,6 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 if calculo:
                     cantidad, subtotal, envio, total = calculo
                     
-                    # Formateamos los números para que se vean bonitos
                     str_subtotal = f"{subtotal:,.2f}"
                     str_total = f"{total:,.2f}"
                     
@@ -211,7 +210,6 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                     respuesta = "No logré entender la cantidad 😅. Por favor, escríbela con números (ej: 60, o 1 docena)."
                     await enviar_mensaje_whatsapp(numero_cliente, respuesta)
 
-            # --- NUEVO BLOQUE: PIDIENDO EL LOGO ---
             elif cliente.paso_embudo == "pidiendo_color":
                 color_elegido = texto_cliente.title()
                 
@@ -224,6 +222,19 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 
                 cliente.paso_embudo = "pidiendo_logo"
                 db.commit()
+                
+            # --- NUEVO BLOQUE: RECIBIENDO EL LOGO Y PIDIENDO NOMBRE ---
+            elif cliente.paso_embudo == "pidiendo_logo":
+                if tipo_mensaje == "image" or texto_cliente == "[imagen]":
+                    respuesta = "✅ **¡Logo Recibido!**\nYa está con nuestro equipo de diseño. 👨‍🎨\n\nPara formalizar tu orden: **¿A nombre de quién la registramos?** 👤"
+                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                    
+                    cliente.paso_embudo = "pidiendo_nombre"
+                    db.commit()
+                else:
+                    # Si responde con texto en lugar de imagen
+                    respuesta = "Aún no detecto la imagen 🤔. Por favor, usa el ícono del clip 📎 o cámara para enviarme la foto de tu logo."
+                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
             
     except Exception as e:
         print(f"Error procesando el webhook: {e}")
