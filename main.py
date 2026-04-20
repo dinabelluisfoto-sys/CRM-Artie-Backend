@@ -154,6 +154,12 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
             if cliente.bot_activo == False:
                 print(f"🤫 Artie en silencio. El cliente {numero_cliente} está en manos de un humano.")
                 return {"status": "ok"}
+            # --- NUEVO: PALABRAS CLAVE DE REINICIO ---
+            palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
+            if texto_cliente in palabras_reinicio:
+                cliente.paso_embudo = "inicio"
+                db.commit()
+                # Al cambiarlo a "inicio", el código seguirá hacia abajo y mostrará el menú principal
                 
             # 4. EL EMBUDO DE VENTAS (Fase 1)
             if cliente.paso_embudo == "inicio":
