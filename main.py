@@ -280,8 +280,7 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 numero_limpio = re.sub(r'\D', '', texto_cliente)
                 
                 if len(numero_limpio) == 8:
-                    # Guardar el número real si lo dio distinto a su WA
-                    cliente.telefono = numero_limpio
+                    # ELIMINAMOS la línea que sobreescribía el ID de WhatsApp
                     respuesta = "Anotado. 📝\nPor último: **¿Cuál es tu NIT para la factura?**\n*(Escribe CF si no tienes)*"
                     await enviar_mensaje_whatsapp(numero_cliente, respuesta)
                     
