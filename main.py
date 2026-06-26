@@ -222,6 +222,16 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                     str_subtotal = f"{subtotal:,.2f}"
                     str_total = f"{total:,.2f}"
                     
+                    # --- ARTIE GUARDA EL PEDIDO EN LA BD AQUÍ ---
+                    nuevo_pedido = models.Pedido(
+                        cliente_id=cliente.id,
+                        cantidad=cantidad,
+                        total_quetzales=total,
+                        estatus="EN PROCESO", # Aún no está terminado
+                        link_logo="n/a"
+                    )
+                    db.add(nuevo_pedido)
+                    
                     respuesta = f"Entendido: **{cantidad} Gorras** 🧢\n"
                     respuesta += f"💰 *Tu Inversión: Q. {str_total} (Subtotal: Q.{str_subtotal} + Q.47 envío)*\n\n"
                     respuesta += "Ahora, dale personalidad. Mira el catálogo 👆 y elige:\n\n"
@@ -270,6 +280,8 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 numero_limpio = re.sub(r'\D', '', texto_cliente)
                 
                 if len(numero_limpio) == 8:
+                    # Guardar el número real si lo dio distinto a su WA
+                    cliente.telefono = numero_limpio
                     respuesta = "Anotado. 📝\nPor último: **¿Cuál es tu NIT para la factura?**\n*(Escribe CF si no tienes)*"
                     await enviar_mensaje_whatsapp(numero_cliente, respuesta)
                     
@@ -283,6 +295,12 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 cliente.nit = texto_cliente.upper()
                 cliente.bot_activo = False
                 cliente.paso_embudo = "completado"
+                
+                # --- ACTUALIZAR EL ESTADO DEL PEDIDO ---
+                pedido_actual = db.query(models.Pedido).filter(models.Pedido.cliente_id == cliente.id).order_by(models.Pedido.id.desc()).first()
+                if pedido_actual:
+                    pedido_actual.estatus = "NUEVO"
+                    
                 db.commit()
                 
                 respuesta = "🎉 **¡Pedido Confirmado Exitosamente!**\n\n"
