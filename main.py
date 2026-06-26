@@ -2,6 +2,7 @@ import os
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
+from fastapi.middleware.cors import CORSMiddleware  # <-- IMPORTANTE: Control de accesos web
 from sqlalchemy.orm import Session
 from typing import List
 import re 
@@ -13,6 +14,17 @@ import models, schemas
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="API CRM Artie", description="Motor de gestión de pedidos con WhatsApp", version="1.2.0")
+
+# =====================================================================
+# --- NUEVO: PUENTE DE PERMISOS (CORS) PARA EL FRONTEND DE ALSYS ---
+# =====================================================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Permite que tu index.html local lea los datos de Railway
+    allow_credentials=True,
+    allow_methods=["*"],  # Permite GET, POST, etc.
+    allow_headers=["*"],
+)
 
 # --- MOTOR DE CÁLCULO DE LA SANJUANERITA ---
 def procesar_pedido_gorras(texto_usuario: str):
@@ -89,6 +101,39 @@ def crear_pedido(pedido: schemas.PedidoCreate, db: Session = Depends(get_db)):
 def listar_pedidos(db: Session = Depends(get_db)):
     return db.query(models.Pedido).all()
 
+# --- RUTA PARA EL DASHBOARD ---
+@app.get("/api/dashboard/")
+def obtener_datos_dashboard(db: Session = Depends(get_db)):
+    pedidos = db.query(models.Pedido, models.Cliente).join(models.Cliente, models.Pedido.cliente_id == models.Cliente.id).order_by(models.Pedido.id.desc()).all()
+    
+    resultados = []
+    for pedido, cliente in pedidos:
+        resultados.append({
+            "pedido_id": pedido.id,
+            "fecha": pedido.fecha_creacion.strftime("%Y-%m-%d %H:%M") if hasattr(pedido, 'fecha_creacion') and pedido.fecha_creacion else "N/A",
+            "cliente_nombre": cliente.nombre,
+            "telefono": cliente.telefono,
+            "nit": cliente.nit,
+            "cantidad": pedido.cantidad,
+            "total_q": float(pedido.total_quetzales),
+            "estatus": pedido.estatus,
+            "bot_activo": cliente.bot_activo
+        })
+    return resultados
+
+# --- RUTA PARA ENCENDER/APAGAR A ARTIE ---
+@app.post("/api/toggle_bot/{telefono}")
+def toggle_bot(telefono: str, db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.telefono == telefono).first()
+    if not cliente:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    
+    cliente.bot_activo = not cliente.bot_activo
+    db.commit()
+    
+    estado_nuevo = "ON" if cliente.bot_activo else "OFF"
+    return {"mensaje": f"Artie ahora está {estado_nuevo} para el número {telefono}"}
+
 # --- RUTA WEBHOOK (Para WhatsApp) ---
 
 @app.get("/webhook")
@@ -139,14 +184,12 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 db.commit()
                 db.refresh(cliente)
                 
-            # --- NUEVO: EL DESPERTADOR DE ARTIE (Debe ir antes de revisar si está apagado) ---
             palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
             if texto_cliente in palabras_reinicio:
-                cliente.bot_activo = True  # ¡Despertamos a Artie!
+                cliente.bot_activo = True  
                 cliente.paso_embudo = "inicio"
                 db.commit()
                 
-            # EL BOTÓN DE PÁNICO
             if cliente.bot_activo == False:
                 print(f"🤫 Artie en silencio. Mensaje de {numero_cliente} para el agente humano.")
                 return {"status": "ok"}
