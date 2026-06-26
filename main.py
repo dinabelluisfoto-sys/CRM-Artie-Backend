@@ -102,6 +102,7 @@ def listar_pedidos(db: Session = Depends(get_db)):
     return db.query(models.Pedido).all()
 
 # --- RUTA PARA EL DASHBOARD ---
+# --- RUTA PARA EL DASHBOARD ---
 @app.get("/api/dashboard/")
 def obtener_datos_dashboard(db: Session = Depends(get_db)):
     pedidos = db.query(models.Pedido, models.Cliente).join(models.Cliente, models.Pedido.cliente_id == models.Cliente.id).order_by(models.Pedido.id.desc()).all()
@@ -110,7 +111,7 @@ def obtener_datos_dashboard(db: Session = Depends(get_db)):
     for pedido, cliente in pedidos:
         resultados.append({
             "pedido_id": pedido.id,
-            "fecha": pedido.fecha_creacion.strftime("%Y-%m-%d %H:%M") if hasattr(pedido, 'fecha_creacion') and pedido.fecha_creacion else "N/A",
+            "fecha": pedido.fecha_pedido.strftime("%Y-%m-%d %H:%M") if pedido.fecha_pedido else "N/A", # <-- ¡Corregido!
             "cliente_nombre": cliente.nombre,
             "telefono": cliente.telefono,
             "nit": cliente.nit,
