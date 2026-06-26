@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware  # <-- IMPORTANTE: Control de
 from sqlalchemy.orm import Session
 from typing import List
 import re 
+from fastapi.staticfiles import StaticFiles
 
 from database import engine, get_db
 import models, schemas
@@ -25,6 +26,12 @@ app.add_middleware(
     allow_methods=["*"],  # Permite GET, POST, etc.
     allow_headers=["*"],
 )
+# --- CONFIGURACIÓN DE ARCHIVOS ESTÁTICOS PARA LAS IMÁGENES ---
+# Esto creará una carpeta automática en tu servidor para tus catálogos
+if not os.path.exists("static"):
+    os.makedirs("static")
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 
 # --- MOTOR DE CÁLCULO DE LA SANJUANERITA ---
 def procesar_pedido_gorras(texto_usuario: str):
@@ -245,8 +252,9 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 
             elif cliente.paso_embudo == "esperando_opcion":
                 if texto_cliente == "1":
-                    respuesta = "¡Excelente decisión! ✨\n\nPara calcular tu mejor precio, **¿cuántas gorras tienes en mente?**\n*(Ej: 1 Docena, 50 unidades, 1 Ciento...)*"
-                    await responder_bot(respuesta)
+                    respuesta = "¡Aquí tienes nuestra lista oficial de precios mayoristas! 💰✨"
+                    link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
+                    await responder_bot(respuesta, imagen_url=link_precios)
                     cliente.paso_embudo = "pidiendo_cantidad"
                     db.commit()
                 elif texto_cliente == "2":
@@ -282,7 +290,8 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                     respuesta += "**¿Cuál es tu color favorito?** (Escríbelo abajo)"
                     
                     # --- NUEVO: ARTIE ENVIA LA FOTO DEL CATALOGO ---
-                    link_catalogo = "https://i.ibb.co/6wD3xqy/image-289980.jpg"
+                    # --- TU NUEVA URL OFICIAL DE RAILWAY ---
+                    link_catalogo = "https://crm-artie-backend-production.up.railway.app/static/colores.jpg"
                     await responder_bot(respuesta, imagen_url=link_catalogo)
                     
                     cliente.paso_embudo = "pidiendo_color"
