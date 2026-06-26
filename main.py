@@ -207,20 +207,23 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
             db.commit()
 
             # --- NUEVO: FUNCION INTERNA PARA RESPONDER Y GUARDAR EN LA BD ---
+            # --- NUEVO: FUNCION INTERNA PARA RESPONDER Y GUARDAR EN LA BD ---
             async def responder_bot(texto_respuesta: str, imagen_url: str = None):
-                if imagen_url:
-                    await enviar_imagen_whatsapp(numero_cliente, imagen_url, texto_respuesta)
-                else:
-                    await enviar_mensaje_whatsapp(numero_cliente, texto_respuesta)
-                
-                # Guardar lo que dijo Artie
+                # 1. Enviar SIEMPRE el texto primero (A prueba de fallos)
+                await enviar_mensaje_whatsapp(numero_cliente, texto_respuesta)
                 msg_bot = models.Mensaje(
-                    cliente_id=cliente.id, 
-                    remitente="bot", 
-                    tipo_mensaje="imagen" if imagen_url else "texto", 
-                    contenido=texto_respuesta
+                    cliente_id=cliente.id, remitente="bot", tipo_mensaje="texto", contenido=texto_respuesta
                 )
                 db.add(msg_bot)
+                
+                # 2. Si hay imagen, dispararla como un segundo mensaje independiente
+                if imagen_url:
+                    await enviar_imagen_whatsapp(numero_cliente, imagen_url)
+                    msg_img = models.Mensaje(
+                        cliente_id=cliente.id, remitente="bot", tipo_mensaje="imagen", contenido=imagen_url
+                    )
+                    db.add(msg_img)
+                    
                 db.commit()
                 
             palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
