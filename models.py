@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey, Boolean, Text
 from sqlalchemy.sql import func
 from database import Base
 
@@ -9,9 +9,8 @@ class Cliente(Base):
     nombre = Column(String, nullable=False)
     telefono = Column(String, unique=True, index=True, nullable=False)
     nit = Column(String, default="CF")
-    # --- NUEVOS CAMPOS PARA ARTIE ---
-    bot_activo = Column(Boolean, default=True) # El Switch ON/OFF
-    paso_embudo = Column(String, default="inicio") # Memoria de la plática
+    bot_activo = Column(Boolean, default=True) 
+    paso_embudo = Column(String, default="inicio") 
 
 class Producto(Base):
     __tablename__ = "productos"
@@ -30,3 +29,14 @@ class Pedido(Base):
     total_quetzales = Column(Numeric(10, 2), nullable=False)
     estatus = Column(String, default="NUEVO")
     link_logo = Column(String, nullable=True)
+
+# --- NUEVA TABLA: LA MEMORIA DEL CHAT TIPO WHATSAPP ---
+class Mensaje(Base):
+    __tablename__ = "mensajes"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    cliente_id = Column(Integer, ForeignKey("clientes.id"))
+    remitente = Column(String, nullable=False) # Guardará: 'cliente', 'bot' o 'humano'
+    tipo_mensaje = Column(String, default="texto") # Guardará: 'texto' o 'imagen'
+    contenido = Column(Text, nullable=False) # Guardará el mensaje o el link de la foto
+    fecha_envio = Column(DateTime(timezone=True), server_default=func.now())
