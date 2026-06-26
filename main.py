@@ -16,7 +16,7 @@ models.Base.metadata.create_all(bind=engine)
 app = FastAPI(title="API CRM Artie", description="Motor de gestión de pedidos con WhatsApp", version="1.2.0")
 
 # =====================================================================
-# --- NUEVO: PUENTE DE PERMISOS (CORS) PARA EL FRONTEND DE ALSYS ---
+# --- PUENTE DE PERMISOS (CORS) PARA EL FRONTEND DE ALSYS ---
 # =====================================================================
 app.add_middleware(
     CORSMiddleware,
@@ -43,19 +43,31 @@ def procesar_pedido_gorras(texto_usuario: str):
     else:
         return None 
         
+    # --- LÓGICA DE PRECIOS EXACTA AL CLIENTE ---
+    envio = 47.00
+    
     if cantidad < 12:
         precio_unitario = 25.00
-    elif 12 <= cantidad < 24:
-        precio_unitario = 280.00 / 12
+        subtotal = cantidad * precio_unitario
+    elif cantidad == 12:
+        # Precio cerrado por docena exacta
+        precio_unitario = 23.33
+        subtotal = 280.00
+    elif 13 <= cantidad < 24:
+        # Por si piden por ejemplo 15 o 18 gorras, se mantiene la tasa de la docena
+        precio_unitario = 23.33
+        subtotal = cantidad * precio_unitario
     elif 24 <= cantidad < 300:
         precio_unitario = 17.99
+        subtotal = cantidad * precio_unitario
     elif 300 <= cantidad < 500:
         precio_unitario = 16.00
+        subtotal = cantidad * precio_unitario
     else: 
         precio_unitario = 15.00
+        subtotal = cantidad * precio_unitario
         
-    subtotal = round(cantidad * precio_unitario, 2)
-    envio = 47.00
+    subtotal = round(subtotal, 2)
     total = round(subtotal + envio, 2)
     
     return cantidad, subtotal, envio, total
@@ -102,7 +114,6 @@ def listar_pedidos(db: Session = Depends(get_db)):
     return db.query(models.Pedido).all()
 
 # --- RUTA PARA EL DASHBOARD ---
-# --- RUTA PARA EL DASHBOARD ---
 @app.get("/api/dashboard/")
 def obtener_datos_dashboard(db: Session = Depends(get_db)):
     pedidos = db.query(models.Pedido, models.Cliente).join(models.Cliente, models.Pedido.cliente_id == models.Cliente.id).order_by(models.Pedido.id.desc()).all()
@@ -111,7 +122,7 @@ def obtener_datos_dashboard(db: Session = Depends(get_db)):
     for pedido, cliente in pedidos:
         resultados.append({
             "pedido_id": pedido.id,
-            "fecha": pedido.fecha_pedido.strftime("%Y-%m-%d %H:%M") if pedido.fecha_pedido else "N/A", # <-- ¡Corregido!
+            "fecha": pedido.fecha_pedido.strftime("%Y-%m-%d %H:%M") if pedido.fecha_pedido else "N/A", 
             "cliente_nombre": cliente.nombre,
             "telefono": cliente.telefono,
             "nit": cliente.nit,
@@ -169,7 +180,7 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
             if tipo_mensaje == "text":
                 texto_cliente = mensaje_info.get("text", {}).get("body", "").strip().lower()
             elif tipo_mensaje == "image":
-                texto_cliente = "[imagen]"
+                texto_cliente = "[imagen adjunta]"
             
             cliente = db.query(models.Cliente).filter(models.Cliente.telefono == numero_cliente).first()
             
@@ -184,6 +195,33 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 db.add(cliente)
                 db.commit()
                 db.refresh(cliente)
+
+            # --- NUEVO: GUARDAR MENSAJE DEL CLIENTE EN LA BD ---
+            msg_cliente = models.Mensaje(
+                cliente_id=cliente.id, 
+                remitente="cliente", 
+                tipo_mensaje="texto" if tipo_mensaje == "text" else "imagen", 
+                contenido=texto_cliente
+            )
+            db.add(msg_cliente)
+            db.commit()
+
+            # --- NUEVO: FUNCION INTERNA PARA RESPONDER Y GUARDAR EN LA BD ---
+            async def responder_bot(texto_respuesta: str, imagen_url: str = None):
+                if imagen_url:
+                    await enviar_imagen_whatsapp(numero_cliente, imagen_url, texto_respuesta)
+                else:
+                    await enviar_mensaje_whatsapp(numero_cliente, texto_respuesta)
+                
+                # Guardar lo que dijo Artie
+                msg_bot = models.Mensaje(
+                    cliente_id=cliente.id, 
+                    remitente="bot", 
+                    tipo_mensaje="imagen" if imagen_url else "texto", 
+                    contenido=texto_respuesta
+                )
+                db.add(msg_bot)
+                db.commit()
                 
             palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
             if texto_cliente in palabras_reinicio:
@@ -198,22 +236,22 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
             # --- EMBUDO DE VENTAS ---
             if cliente.paso_embudo == "inicio":
                 respuesta = "¡Hola! 👋 Bienvenido a La Sanjuanerita. Soy Artie, tu asistente virtual.\n\n¿Listo para destacar tu marca?\n1️⃣ Iniciar mi Pedido\n2️⃣ Ver Precios y Ofertas\n\n*(Responde con el número)*"
-                await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                await responder_bot(respuesta)
                 cliente.paso_embudo = "esperando_opcion"
                 db.commit()
                 
             elif cliente.paso_embudo == "esperando_opcion":
                 if texto_cliente == "1":
                     respuesta = "¡Excelente decisión! ✨\n\nPara calcular tu mejor precio, **¿cuántas gorras tienes en mente?**\n*(Ej: 1 Docena, 50 unidades, 1 Ciento...)*"
-                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                    await responder_bot(respuesta)
                     cliente.paso_embudo = "pidiendo_cantidad"
                     db.commit()
                 elif texto_cliente == "2":
                     respuesta = "Actualmente manejamos Gorras Trucker desde Q.17.99 c/u (precio mayorista). ¿Deseas iniciar tu pedido respondiendo '1'?"
-                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                    await responder_bot(respuesta)
                 else:
                     respuesta = "Por favor, responde únicamente con el número 1 o 2 para continuar."
-                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                    await responder_bot(respuesta)
                     
             elif cliente.paso_embudo == "pidiendo_cantidad":
                 calculo = procesar_pedido_gorras(texto_cliente)
@@ -222,12 +260,11 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                     str_subtotal = f"{subtotal:,.2f}"
                     str_total = f"{total:,.2f}"
                     
-                    # --- ARTIE GUARDA EL PEDIDO EN LA BD AQUÍ ---
                     nuevo_pedido = models.Pedido(
                         cliente_id=cliente.id,
                         cantidad=cantidad,
                         total_quetzales=total,
-                        estatus="EN PROCESO", # Aún no está terminado
+                        estatus="EN PROCESO",
                         link_logo="n/a"
                     )
                     db.add(nuevo_pedido)
@@ -241,12 +278,15 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                     respuesta += "🌸 *Pastel:* Rosa Millenial.\n\n"
                     respuesta += "**¿Cuál es tu color favorito?** (Escríbelo abajo)"
                     
-                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                    # --- NUEVO: ARTIE ENVIA LA FOTO DEL CATALOGO ---
+                    link_catalogo = "https://i.ibb.co/6wD3xqy/image-289980.jpg"
+                    await responder_bot(respuesta, imagen_url=link_catalogo)
+                    
                     cliente.paso_embudo = "pidiendo_color"
                     db.commit()
                 else:
                     respuesta = "No logré entender la cantidad 😅. Por favor, escríbela con números (ej: 60, o 1 docena)."
-                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                    await responder_bot(respuesta)
 
             elif cliente.paso_embudo == "pidiendo_color":
                 color_elegido = texto_cliente.title()
@@ -255,24 +295,24 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 respuesta += "👉 *Envía la FOTO de tu LOGO aquí.*\n\n"
                 respuesta += "*(Con esto haremos un \"Pre-diseño Digital\" para que apruebes cómo se ve antes de fabricar).*"
                 
-                await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                await responder_bot(respuesta)
                 cliente.paso_embudo = "pidiendo_logo"
                 db.commit()
                 
             elif cliente.paso_embudo == "pidiendo_logo":
-                if tipo_mensaje == "image" or texto_cliente == "[imagen]":
+                if tipo_mensaje == "image" or texto_cliente == "[imagen adjunta]":
                     respuesta = "✅ **¡Logo Recibido!**\nYa está con nuestro equipo de diseño. 👨‍🎨\n\nPara formalizar tu orden: **¿A nombre de quién la registramos?** 👤"
-                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                    await responder_bot(respuesta)
                     cliente.paso_embudo = "pidiendo_nombre"
                     db.commit()
                 else:
                     respuesta = "Aún no detecto la imagen 🤔. Por favor, usa el ícono del clip 📎 o cámara para enviarme la foto de tu logo."
-                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                    await responder_bot(respuesta)
                     
             elif cliente.paso_embudo == "pidiendo_nombre":
                 cliente.nombre = texto_cliente.title()
                 respuesta = f"Un gusto, {cliente.nombre}. 🤝\n📞 **¿A qué número de teléfono te podemos llamar para confirmar el diseño?**"
-                await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                await responder_bot(respuesta)
                 cliente.paso_embudo = "pidiendo_telefono"
                 db.commit()
                 
@@ -280,22 +320,19 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 numero_limpio = re.sub(r'\D', '', texto_cliente)
                 
                 if len(numero_limpio) == 8:
-                    # ELIMINAMOS la línea que sobreescribía el ID de WhatsApp
                     respuesta = "Anotado. 📝\nPor último: **¿Cuál es tu NIT para la factura?**\n*(Escribe CF si no tienes)*"
-                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
-                    
+                    await responder_bot(respuesta)
                     cliente.paso_embudo = "pidiendo_nit"
                     db.commit()
                 else:
                     respuesta = "Ese número no parece tener la cantidad correcta 🤔.\n\nPor favor, escribe un número de teléfono válido de **8 dígitos** para que no haya problemas con tu entrega."
-                    await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                    await responder_bot(respuesta)
                 
             elif cliente.paso_embudo == "pidiendo_nit":
                 cliente.nit = texto_cliente.upper()
                 cliente.bot_activo = False
                 cliente.paso_embudo = "completado"
                 
-                # --- ACTUALIZAR EL ESTADO DEL PEDIDO ---
                 pedido_actual = db.query(models.Pedido).filter(models.Pedido.cliente_id == cliente.id).order_by(models.Pedido.id.desc()).first()
                 if pedido_actual:
                     pedido_actual.estatus = "NUEVO"
@@ -308,14 +345,14 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 respuesta += "⏳ *Siguiente paso:* En breve te enviaremos el **\"Pre-diseño Digital\"** a este chat para tu aprobación.\n\n"
                 respuesta += "¡Gracias por confiar en *La Sanjuanerita*! 🧢"
                 
-                await enviar_mensaje_whatsapp(numero_cliente, respuesta)
+                await responder_bot(respuesta)
             
     except Exception as e:
         print(f"Error procesando el webhook: {e}")
         
     return {"status": "ok"}
 
-# --- MOTOR DE ENVÍO DE MENSAJES ---
+# --- MOTOR DE ENVÍO DE MENSAJES DE TEXTO ---
 async def enviar_mensaje_whatsapp(numero_destino: str, texto: str):
     token = os.getenv("WHATSAPP_TOKEN")
     phone_id = os.getenv("PHONE_NUMBER_ID")
@@ -338,3 +375,30 @@ async def enviar_mensaje_whatsapp(numero_destino: str, texto: str):
         response = await client.post(url, headers=headers, json=payload)
         if response.status_code != 200:
             print("Error detallado de Meta:", response.json())
+
+# --- NUEVO: MOTOR DE ENVÍO DE IMÁGENES ---
+async def enviar_imagen_whatsapp(numero_destino: str, link_imagen: str, caption: str = ""):
+    token = os.getenv("WHATSAPP_TOKEN")
+    phone_id = os.getenv("PHONE_NUMBER_ID")
+    
+    url = f"https://graph.facebook.com/v25.0/{phone_id}/messages"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": numero_destino,
+        "type": "image",
+        "image": {
+            "link": link_imagen,
+            "caption": caption
+        }
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, headers=headers, json=payload)
+        if response.status_code != 200:
+            print("Error enviando imagen a Meta:", response.json())
