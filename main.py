@@ -356,11 +356,13 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
     return {"status": "ok"}
 
 # --- MOTOR DE ENVÍO DE MENSAJES DE TEXTO ---
+# --- MOTOR DE ENVÍO DE MENSAJES DE TEXTO ---
 async def enviar_mensaje_whatsapp(numero_destino: str, texto: str):
     token = os.getenv("WHATSAPP_TOKEN")
     phone_id = os.getenv("PHONE_NUMBER_ID")
     
-    url = f"https://graph.facebook.com/v25.0/{phone_id}/messages"
+    # Usamos la v17.0 que es la más estable a nivel global para mensajería directa
+    url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
     
     headers = {
         "Authorization": f"Bearer {token}",
@@ -377,14 +379,14 @@ async def enviar_mensaje_whatsapp(numero_destino: str, texto: str):
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers, json=payload)
         if response.status_code != 200:
-            print("Error detallado de Meta:", response.json())
+            print("Error detallado de Meta (Texto):", response.text, flush=True)
 
-# --- NUEVO: MOTOR DE ENVÍO DE IMÁGENES ---
+# --- MOTOR DE ENVÍO DE IMÁGENES BLINDADO ---
 async def enviar_imagen_whatsapp(numero_destino: str, link_imagen: str, caption: str = ""):
     token = os.getenv("WHATSAPP_TOKEN")
     phone_id = os.getenv("PHONE_NUMBER_ID")
     
-    url = f"https://graph.facebook.com/v25.0/{phone_id}/messages"
+    url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
     
     headers = {
         "Authorization": f"Bearer {token}",
@@ -396,12 +398,15 @@ async def enviar_imagen_whatsapp(numero_destino: str, link_imagen: str, caption:
         "to": numero_destino,
         "type": "image",
         "image": {
-            "link": link_imagen,
-            "caption": caption
+            "link": link_imagen
         }
     }
     
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=payload)
-        if response.status_code != 200:
-            print("Error enviando imagen a Meta:", response.json())
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, json=payload, timeout=5.0)
+            if response.status_code != 200:
+                print("Meta rechazó la imagen pero el flujo continúa:", response.text, flush=True)
+    except Exception as img_err:
+        # Si el servidor de imágenes falla o hay timeout, la app no se congela
+        print(f"Fallo de conexión al enviar imagen: {img_err}", flush=True)
