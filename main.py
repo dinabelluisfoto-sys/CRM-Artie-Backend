@@ -11,6 +11,40 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from database import engine, get_db
 import models, schemas
+from fastapi import UploadFile, File
+import shutil
+import os
+
+# Asegúrate de tener una carpeta estática para almacenar temporalmente los pre-diseños
+os.makedirs("static/uploads", exist_ok=True)
+
+@app.post("/api/enviar_imagen_humano/{cliente_id}")
+async def enviar_imagen_manual(cliente_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+    if not cliente:
+        return {"status": "error", "message": "Cliente no encontrado"}
+    
+    # 1. Guardamos el archivo localmente en Railway
+    ruta_archivo = f"static/uploads/{cliente.id}_{file.filename}"
+    with open(ruta_archivo, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    url_publica_imagen = f"https://crm-artie-backend-production.up.railway.app/{ruta_archivo}"
+    
+    # 2. Disparamos la imagen real por la API de WhatsApp al cliente
+    await enviar_imagen_whatsapp(cliente.telefono, url_publica_imagen)
+    
+    # 3. Guardamos el registro en el historial del chat
+    msg_humano = models.Mensaje(
+        cliente_id=cliente.id, 
+        remitente="humano", 
+        tipo_mensaje="imagen", 
+        contenido=url_publica_imagen
+    )
+    db.add(msg_humano)
+    db.commit()
+    
+    return {"status": "ok", "url": url_publica_imagen}
 
 # Asegurarnos de que las tablas existan
 models.Base.metadata.create_all(bind=engine)
@@ -160,9 +194,11 @@ def obtener_dashboard_chats(db: Session = Depends(get_db)):
         total_q = pedido_reciente.total_quetzales if pedido_reciente else 0.0
         cantidad_gorras = pedido_reciente.cantidad if pedido_reciente else 0
         
+       # 🔥 CLAVE: Forzamos a que si es un chat general, use el número. 
+        # Solo mostrará nombre si tú implementas un botón de guardado manual más adelante.
         resultado_chats.append({
             "cliente_id": c.id,
-            "cliente_nombre": c.nombre if c.nombre and c.nombre.lower() != "pendiente" else f"+{c.telefono}",
+            "cliente_nombre": f"+{c.telefono}", # Forzado estilo WhatsApp corporativo
             "telefono": c.telefono,
             "bot_activo": c.bot_activo,
             "estatus": c.paso_embudo.upper(),
