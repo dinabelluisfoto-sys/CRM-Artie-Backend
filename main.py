@@ -483,3 +483,42 @@ async def enviar_imagen_whatsapp(numero_destino: str, link_imagen: str, caption:
     except Exception as img_err:
         # Si el servidor de imágenes falla o hay timeout, la app no se congela
         print(f"Fallo de conexión al enviar imagen: {img_err}", flush=True)
+
+        from pydantic import BaseModel
+
+class MensajeEnvio(BaseModel):
+    texto: str
+
+# 1. RUTA PARA ENVIAR MENSAJES COMO HUMANO
+@app.post("/api/enviar_mensaje/{cliente_id}")
+async def enviar_mensaje_manual(cliente_id: int, mensaje: MensajeEnvio, db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+    if not cliente:
+        return {"status": "error"}
+    
+    # Disparamos el mensaje real a WhatsApp
+    await enviar_mensaje_whatsapp(cliente.telefono, mensaje.texto)
+    
+    # Lo guardamos en el historial del CRM
+    msg_humano = models.Mensaje(cliente_id=cliente.id, remitente="humano", tipo_mensaje="texto", contenido=mensaje.texto)
+    db.add(msg_humano)
+    db.commit()
+    return {"status": "ok"}
+
+# 2. RUTA PARA FIJAR CHAT
+@app.post("/api/chat/{cliente_id}/fijar")
+def toggle_fijar_chat(cliente_id: int, db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+    if cliente:
+        cliente.esta_fijado = not cliente.esta_fijado
+        db.commit()
+    return {"status": "ok"}
+
+# 3. RUTA PARA ELIMINAR/OCULTAR CHAT
+@app.post("/api/chat/{cliente_id}/eliminar")
+def ocultar_chat(cliente_id: int, db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+    if cliente:
+        cliente.esta_eliminado = True
+        db.commit()
+    return {"status": "ok"}
