@@ -1,6 +1,6 @@
 import os
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware  # <-- IMPORTANTE: Control de accesos web
 from sqlalchemy.orm import Session
@@ -169,212 +169,190 @@ async def verificar_webhook(request: Request):
     raise HTTPException(status_code=403, detail="Token de verificación inválido")
 
 @app.post("/webhook")
-async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
+async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
     
-    try:
-        entry = data.get("entry", [])[0]
-        changes = entry.get("changes", [])[0]
-        value = changes.get("value", {})
-        
-        if "messages" in value:
-            mensaje_info = value["messages"][0]
-            numero_cliente = mensaje_info["from"]
+    # Esta función hará todo el trabajo pesado en segundo plano sin hacer esperar a Meta
+    async def procesar_flujo():
+        # Creamos una conexión a la base de datos exclusiva para esta tarea
+        db = next(get_db()) 
+        try:
+            entry = data.get("entry", [])[0]
+            changes = entry.get("changes", [])[0]
+            value = changes.get("value", {})
             
-            tipo_mensaje = mensaje_info.get("type")
-            texto_cliente = ""
-            
-            if tipo_mensaje == "text":
-                texto_cliente = mensaje_info.get("text", {}).get("body", "").strip().lower()
-            elif tipo_mensaje == "image":
-                texto_cliente = "[imagen adjunta]"
-            
-            cliente = db.query(models.Cliente).filter(models.Cliente.telefono == numero_cliente).first()
-            
-            if not cliente:
-                cliente = models.Cliente(
-                    nombre="Pendiente", 
-                    telefono=numero_cliente, 
-                    nit="CF", 
-                    bot_activo=True, 
-                    paso_embudo="inicio"
-                )
-                db.add(cliente)
-                db.commit()
-                db.refresh(cliente)
+            if "messages" in value:
+                mensaje_info = value["messages"][0]
+                numero_cliente = mensaje_info["from"]
+                tipo_mensaje = mensaje_info.get("type")
+                
+                texto_cliente = ""
+                if tipo_mensaje == "text":
+                    texto_cliente = mensaje_info.get("text", {}).get("body", "").strip().lower()
+                elif tipo_mensaje == "image":
+                    texto_cliente = "[imagen adjunta]"
+                
+                cliente = db.query(models.Cliente).filter(models.Cliente.telefono == numero_cliente).first()
+                
+                if not cliente:
+                    cliente = models.Cliente(nombre="Pendiente", telefono=numero_cliente, nit="CF", bot_activo=True, paso_embudo="inicio")
+                    db.add(cliente)
+                    db.commit()
+                    db.refresh(cliente)
 
-            # --- NUEVO: GUARDAR MENSAJE DEL CLIENTE EN LA BD ---
-            msg_cliente = models.Mensaje(
-                cliente_id=cliente.id, 
-                remitente="cliente", 
-                tipo_mensaje="texto" if tipo_mensaje == "text" else "imagen", 
-                contenido=texto_cliente
-            )
-            db.add(msg_cliente)
-            db.commit()
+                msg_cliente = models.Mensaje(cliente_id=cliente.id, remitente="cliente", tipo_mensaje="texto" if tipo_mensaje == "text" else "imagen", contenido=texto_cliente)
+                db.add(msg_cliente)
+                db.commit()
 
-            # --- NUEVO: FUNCION INTERNA PARA RESPONDER Y GUARDAR EN LA BD ---
-            async def responder_bot(texto_respuesta: str, imagen_url: str = None):
-                # 1. Si hay imagen, dispararla PRIMERO para que quede arriba en el chat
-                if imagen_url:
-                    await enviar_imagen_whatsapp(numero_cliente, imagen_url)
-                    msg_img = models.Mensaje(
-                        cliente_id=cliente.id, remitente="bot", tipo_mensaje="imagen", contenido=imagen_url
-                    )
-                    db.add(msg_img)
-                    
-                # 2. Enviar el texto DESPUÉS para que quede justo abajo con las instrucciones
-                await enviar_mensaje_whatsapp(numero_cliente, texto_respuesta)
-                msg_bot = models.Mensaje(
-                    cliente_id=cliente.id, remitente="bot", tipo_mensaje="texto", contenido=texto_respuesta
-                )
-                db.add(msg_bot)
-                
-                db.commit()
-                
-            palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
-            if texto_cliente in palabras_reinicio:
-                cliente.bot_activo = True  
-                cliente.paso_embudo = "inicio"
-                db.commit()
-                
-            if cliente.bot_activo == False:
-                print(f"🤫 Artie en silencio. Mensaje de {numero_cliente} para el agente humano.")
-                return {"status": "ok"}
-                
-            # --- EMBUDO DE VENTAS ---
-            if cliente.paso_embudo == "inicio":
-                respuesta = "¡Hola! 👋 Bienvenido a La Sanjuanerita. Soy Artie, tu asistente virtual.\n\n¿Listo para destacar tu marca?\n1️⃣ Iniciar mi Pedido\n2️⃣ Ver Precios y Ofertas\n\n*(Responde con el número)*"
-                await responder_bot(respuesta)
-                cliente.paso_embudo = "esperando_opcion"
-                db.commit()
-                
-            elif cliente.paso_embudo == "esperando_opcion":
-                if texto_cliente == "1":
-                    # --- OPCIÓN 1: INICIAR PEDIDO (Va directo a pedir cantidad sin imagen) ---
-                    respuesta = "¡Excelente decisión! ✨\n\nPara calcular tu mejor precio, **¿cuántas gorras tienes en mente?**\n*(Ej: 1 Docena, 50 unidades, 1 Ciento...)*"
-                    await responder_bot(respuesta)
-                    cliente.paso_embudo = "pidiendo_cantidad"
+                # --- MOTOR DE RESPUESTA INTERNO ---
+                async def responder_bot(texto_respuesta: str, imagen_url: str = None):
+                    # 1. Enviar primero la imagen (si existe)
+                    if imagen_url:
+                        await enviar_imagen_whatsapp(numero_cliente, imagen_url)
+                        msg_img = models.Mensaje(cliente_id=cliente.id, remitente="bot", tipo_mensaje="imagen", contenido=imagen_url)
+                        db.add(msg_img)
+                        db.commit()
+                        
+                    # 2. Enviar después el texto
+                    await enviar_mensaje_whatsapp(numero_cliente, texto_respuesta)
+                    msg_bot = models.Mensaje(cliente_id=cliente.id, remitente="bot", tipo_mensaje="texto", contenido=texto_respuesta)
+                    db.add(msg_bot)
                     db.commit()
-                    
-                elif texto_cliente == "2":
-                    respuesta = "☝️ *Aquí tienes nuestra lista oficial de precios mayoristas.*\n\n"
-                    respuesta += "📌 *Escala por volumen:*\n"
-                    respuesta += "📦 *1 Docena (12)*: Q.280 en total\n"
-                    respuesta += "📦 *24 a 299 gorras*: Q.17.99 c/u\n"
-                    respuesta += "📦 *300 a 499 gorras*: Q.16.00 c/u\n"
-                    respuesta += "📦 *500+ gorras*: Q.15.00 c/u\n\n"
-                    respuesta += "💡 **¿Cuántas gorras te gustaría pedir?**\n"
-                    respuesta += "👉 Por favor, responde con el número **1** para iniciar tu pedido y calcular tu total."
-                    
-                    link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
-                    await responder_bot(respuesta, imagen_url=link_precios)
-                    
-                    # Aquí usamos tu imagen estática de Railway
-                    link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
-                    await responder_bot(respuesta, imagen_url=link_precios)
-                    # Nota: NO cambiamos el paso del embudo aquí, para que siga esperando que presione 1.
-                    
-                else:
-                    respuesta = "Por favor, responde únicamente con el número 1 o 2 para continuar."
-                    await responder_bot(respuesta)
-                    
-            elif cliente.paso_embudo == "pidiendo_cantidad":
-                calculo = procesar_pedido_gorras(texto_cliente)
-                if calculo:
-                    cantidad, subtotal, envio, total = calculo
-                    str_subtotal = f"{subtotal:,.2f}"
-                    str_total = f"{total:,.2f}"
-                    
-                    nuevo_pedido = models.Pedido(
-                        cliente_id=cliente.id,
-                        cantidad=cantidad,
-                        total_quetzales=total,
-                        estatus="EN PROCESO",
-                        link_logo="n/a"
-                    )
-                    db.add(nuevo_pedido)
-                    
-                    respuesta = f"Entendido: **{cantidad} Gorras** 🧢\n"
-                    respuesta += f"💰 *Tu Inversión: Q. {str_total} (Subtotal: Q.{str_subtotal} + Q.47 envío)*\n\n"
-                    respuesta += "Ahora, dale personalidad. Mira el catálogo de arriba ☝️ y elige:\n\n"
-                    respuesta += "🤍 *Neutros:* Blanco, Negro, Gris Claro, Gris Oscuro.\n"
-                    respuesta += "💙 *Azules:* Marino, Rey, Celeste.\n"
-                    respuesta += "🌈 *Vivos:* Rosa, Amarillo Mango, Verde Oscuro, Morado.\n"
-                    respuesta += "🌸 *Pastel:* Rosa Millenial.\n\n"
-                    respuesta += "👉 **¿Cuál es tu color favorito?** *(Escríbelo aquí abajo)*"
-                    
-                    link_catalogo = "https://crm-artie-backend-production.up.railway.app/static/colores.jpg"
-                    await responder_bot(respuesta, imagen_url=link_catalogo)
-                    
-                    cliente.paso_embudo = "pidiendo_color"
-                    db.commit()
-                else:
-                    respuesta = "No logré entender la cantidad 😅. Por favor, escríbela con números (ej: 60, o 1 docena)."
-                    await responder_bot(respuesta)
 
-            elif cliente.paso_embudo == "pidiendo_color":
-                color_elegido = texto_cliente.title()
-                respuesta = f"¡El {color_elegido} es una gran elección! ✨\n\n"
-                respuesta += "Ahora, la parte más importante: *Tu Marca.*\n"
-                respuesta += "👉 *Envía la FOTO de tu LOGO aquí.*\n\n"
-                respuesta += "*(Con esto haremos un \"Pre-diseño Digital\" para que apruebes cómo se ve antes de fabricar).*"
-                
-                await responder_bot(respuesta)
-                cliente.paso_embudo = "pidiendo_logo"
-                db.commit()
-                
-            elif cliente.paso_embudo == "pidiendo_logo":
-                if tipo_mensaje == "image" or texto_cliente == "[imagen adjunta]":
-                    respuesta = "✅ **¡Logo Recibido!**\nYa está con nuestro equipo de diseño. 👨‍🎨\n\nPara formalizar tu orden: **¿A nombre de quién la registramos?** 👤"
-                    await responder_bot(respuesta)
-                    cliente.paso_embudo = "pidiendo_nombre"
+                palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
+                if texto_cliente in palabras_reinicio:
+                    cliente.bot_activo = True  
+                    cliente.paso_embudo = "inicio"
                     db.commit()
-                else:
-                    respuesta = "Aún no detecto la imagen 🤔. Por favor, usa el ícono del clip 📎 o cámara para enviarme la foto de tu logo."
+                    
+                if cliente.bot_activo == False:
+                    print(f"🤫 Artie en silencio. Mensaje de {numero_cliente} para el agente humano.", flush=True)
+                    return 
+                    
+                # --- EMBUDO DE VENTAS ---
+                if cliente.paso_embudo == "inicio":
+                    respuesta = "¡Hola! 👋 Bienvenido a La Sanjuanerita. Soy Artie, tu asistente virtual.\n\n¿Listo para destacar tu marca?\n1️⃣ Iniciar mi Pedido\n2️⃣ Ver Precios y Ofertas\n\n*(Responde con el número)*"
+                    await responder_bot(respuesta)
+                    cliente.paso_embudo = "esperando_opcion"
+                    db.commit()
+                    
+                elif cliente.paso_embudo == "esperando_opcion":
+                    if texto_cliente == "1":
+                        respuesta = "¡Excelente decisión! ✨\n\nPara calcular tu mejor precio, **¿cuántas gorras tienes en mente?**\n*(Ej: 1 Docena, 50 unidades, 1 Ciento...)*"
+                        await responder_bot(respuesta)
+                        cliente.paso_embudo = "pidiendo_cantidad"
+                        db.commit()
+                        
+                    elif texto_cliente == "2":
+                        respuesta = "☝️ *Aquí tienes nuestra lista oficial de precios mayoristas.*\n\n"
+                        respuesta += "📌 *Escala por volumen:*\n"
+                        respuesta += "📦 *1 Docena (12)*: Q.280 en total\n"
+                        respuesta += "📦 *24 a 299 gorras*: Q.17.99 c/u\n"
+                        respuesta += "📦 *300 a 499 gorras*: Q.16.00 c/u\n"
+                        respuesta += "📦 *500+ gorras*: Q.15.00 c/u\n\n"
+                        respuesta += "💡 **¿Cuántas gorras te gustaría pedir?**\n"
+                        respuesta += "👉 Por favor, responde con el número **1** para iniciar tu pedido y calcular tu total."
+                        
+                        link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
+                        await responder_bot(respuesta, imagen_url=link_precios)
+                        
+                    else:
+                        respuesta = "Por favor, responde únicamente con el número 1 o 2 para continuar."
+                        await responder_bot(respuesta)
+                        
+                elif cliente.paso_embudo == "pidiendo_cantidad":
+                    calculo = procesar_pedido_gorras(texto_cliente)
+                    if calculo:
+                        cantidad, subtotal, envio, total = calculo
+                        str_subtotal = f"{subtotal:,.2f}"
+                        str_total = f"{total:,.2f}"
+                        
+                        nuevo_pedido = models.Pedido(cliente_id=cliente.id, cantidad=cantidad, total_quetzales=total, estatus="EN PROCESO", link_logo="n/a")
+                        db.add(nuevo_pedido)
+                        
+                        respuesta = f"Entendido: **{cantidad} Gorras** 🧢\n"
+                        respuesta += f"💰 *Tu Inversión: Q. {str_total} (Subtotal: Q.{str_subtotal} + Q.47 envío)*\n\n"
+                        respuesta += "Ahora, dale personalidad. Mira el catálogo de arriba ☝️ y elige:\n\n"
+                        respuesta += "🤍 *Neutros:* Blanco, Negro, Gris Claro, Gris Oscuro.\n"
+                        respuesta += "💙 *Azules:* Marino, Rey, Celeste.\n"
+                        respuesta += "🌈 *Vivos:* Rosa, Amarillo Mango, Verde Oscuro, Morado.\n"
+                        respuesta += "🌸 *Pastel:* Rosa Millenial.\n\n"
+                        respuesta += "👉 **¿Cuál es tu color favorito?** *(Escríbelo aquí abajo)*"
+                        
+                        link_catalogo = "https://crm-artie-backend-production.up.railway.app/static/colores.jpg"
+                        await responder_bot(respuesta, imagen_url=link_catalogo)
+                        
+                        cliente.paso_embudo = "pidiendo_color"
+                        db.commit()
+                    else:
+                        respuesta = "No logré entender la cantidad 😅. Por favor, escríbela con números (ej: 60, o 1 docena)."
+                        await responder_bot(respuesta)
+
+                elif cliente.paso_embudo == "pidiendo_color":
+                    color_elegido = texto_cliente.title()
+                    respuesta = f"¡El {color_elegido} es una gran elección! ✨\n\n"
+                    respuesta += "Ahora, la parte más importante: *Tu Marca.*\n"
+                    respuesta += "👉 *Envía la FOTO de tu LOGO aquí.*\n\n"
+                    respuesta += "*(Con esto haremos un \"Pre-diseño Digital\" para que apruebes cómo se ve antes de fabricar).*"
+                    await responder_bot(respuesta)
+                    cliente.paso_embudo = "pidiendo_logo"
+                    db.commit()
+                    
+                elif cliente.paso_embudo == "pidiendo_logo":
+                    if tipo_mensaje == "image" or texto_cliente == "[imagen adjunta]":
+                        respuesta = "✅ **¡Logo Recibido!**\nYa está con nuestro equipo de diseño. 👨‍🎨\n\nPara formalizar tu orden: **¿A nombre de quién la registramos?** 👤"
+                        await responder_bot(respuesta)
+                        cliente.paso_embudo = "pidiendo_nombre"
+                        db.commit()
+                    else:
+                        respuesta = "Aún no detecto la imagen 🤔. Por favor, usa el ícono del clip 📎 o cámara para enviarme la foto de tu logo."
+                        await responder_bot(respuesta)
+                        
+                elif cliente.paso_embudo == "pidiendo_nombre":
+                    cliente.nombre = texto_cliente.title()
+                    respuesta = f"Un gusto, {cliente.nombre}. 🤝\n📞 **¿A qué número de teléfono te podemos llamar para confirmar el diseño?**"
+                    await responder_bot(respuesta)
+                    cliente.paso_embudo = "pidiendo_telefono"
+                    db.commit()
+                    
+                elif cliente.paso_embudo == "pidiendo_telefono":
+                    numero_limpio = re.sub(r'\D', '', texto_cliente)
+                    if len(numero_limpio) == 8:
+                        respuesta = "Anotado. 📝\nPor último: **¿Cuál es tu NIT para la factura?**\n*(Escribe CF si no tienes)*"
+                        await responder_bot(respuesta)
+                        cliente.paso_embudo = "pidiendo_nit"
+                        db.commit()
+                    else:
+                        respuesta = "Ese número no parece tener la cantidad correcta 🤔.\n\nPor favor, escribe un número de teléfono válido de **8 dígitos** para que no haya problemas con tu entrega."
+                        await responder_bot(respuesta)
+                    
+                elif cliente.paso_embudo == "pidiendo_nit":
+                    cliente.nit = texto_cliente.upper()
+                    cliente.bot_activo = False
+                    cliente.paso_embudo = "completado"
+                    
+                    pedido_actual = db.query(models.Pedido).filter(models.Pedido.cliente_id == cliente.id).order_by(models.Pedido.id.desc()).first()
+                    if pedido_actual:
+                        pedido_actual.estatus = "NUEVO"
+                        
+                    db.commit()
+                    
+                    respuesta = "🎉 **¡Pedido Confirmado Exitosamente!**\n\n"
+                    respuesta += "📦 *Estado:* Orden registrada y enviada a mesa de diseño.\n"
+                    respuesta += "💳 *Método de Pago:* Contra-entrega.\n\n"
+                    respuesta += "⏳ *Siguiente paso:* En breve te enviaremos el **\"Pre-diseño Digital\"** a este chat para tu aprobación.\n\n"
+                    respuesta += "¡Gracias por confiar en *La Sanjuanerita*! 🧢"
                     await responder_bot(respuesta)
                     
-            elif cliente.paso_embudo == "pidiendo_nombre":
-                cliente.nombre = texto_cliente.title()
-                respuesta = f"Un gusto, {cliente.nombre}. 🤝\n📞 **¿A qué número de teléfono te podemos llamar para confirmar el diseño?**"
-                await responder_bot(respuesta)
-                cliente.paso_embudo = "pidiendo_telefono"
-                db.commit()
-                
-            elif cliente.paso_embudo == "pidiendo_telefono":
-                numero_limpio = re.sub(r'\D', '', texto_cliente)
-                
-                if len(numero_limpio) == 8:
-                    respuesta = "Anotado. 📝\nPor último: **¿Cuál es tu NIT para la factura?**\n*(Escribe CF si no tienes)*"
-                    await responder_bot(respuesta)
-                    cliente.paso_embudo = "pidiendo_nit"
-                    db.commit()
-                else:
-                    respuesta = "Ese número no parece tener la cantidad correcta 🤔.\n\nPor favor, escribe un número de teléfono válido de **8 dígitos** para que no haya problemas con tu entrega."
-                    await responder_bot(respuesta)
-                
-            elif cliente.paso_embudo == "pidiendo_nit":
-                cliente.nit = texto_cliente.upper()
-                cliente.bot_activo = False
-                cliente.paso_embudo = "completado"
-                
-                pedido_actual = db.query(models.Pedido).filter(models.Pedido.cliente_id == cliente.id).order_by(models.Pedido.id.desc()).first()
-                if pedido_actual:
-                    pedido_actual.estatus = "NUEVO"
-                    
-                db.commit()
-                
-                respuesta = "🎉 **¡Pedido Confirmado Exitosamente!**\n\n"
-                respuesta += "📦 *Estado:* Orden registrada y enviada a mesa de diseño.\n"
-                respuesta += "💳 *Método de Pago:* Contra-entrega.\n\n"
-                respuesta += "⏳ *Siguiente paso:* En breve te enviaremos el **\"Pre-diseño Digital\"** a este chat para tu aprobación.\n\n"
-                respuesta += "¡Gracias por confiar en *La Sanjuanerita*! 🧢"
-                
-                await responder_bot(respuesta)
-            
-    except Exception as e:
-        print(f"Error procesando el webhook: {e}")
-        
+        except Exception as e:
+            print(f"Error procesando el webhook en background: {e}", flush=True)
+        finally:
+            db.close() # Cerramos la sesión de base de datos de forma segura
+
+    # 🔥 LA MAGIA: Le pasamos la tarea al servidor para que la haga en background
+    background_tasks.add_task(procesar_flujo)
+    
+    # Y le respondemos a Meta INMEDIATAMENTE para que no duplique el mensaje
     return {"status": "ok"}
 
 # --- MOTOR DE ENVÍO DE MENSAJES DE TEXTO ---
