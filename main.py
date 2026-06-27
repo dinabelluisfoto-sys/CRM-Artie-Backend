@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from typing import List
 import re 
 from fastapi.staticfiles import StaticFiles
-
+from pydantic import BaseModel
 from database import engine, get_db
 import models, schemas
 
