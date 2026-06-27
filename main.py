@@ -16,7 +16,21 @@ import models, schemas
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="API CRM Artie", description="Motor de gestión de pedidos con WhatsApp", version="1.2.0")
-
+# 🛠️ PARCHE PARA ACTUALIZAR LA BASE DE DATOS
+@app.on_event("startup")
+def actualizar_base_datos():
+    from sqlalchemy import text
+    from database import engine # Asegúrate de que esto coincida con cómo importas tu motor
+    
+    try:
+        with engine.begin() as conn:
+            # Obligamos a PostgreSQL a crear las columnas si no existen
+            conn.execute(text("ALTER TABLE clientes ADD COLUMN esta_fijado BOOLEAN DEFAULT FALSE;"))
+            conn.execute(text("ALTER TABLE clientes ADD COLUMN esta_eliminado BOOLEAN DEFAULT FALSE;"))
+            print("✅ Base de datos actualizada con nuevas columnas.", flush=True)
+    except Exception as e:
+        # Si da error, significa que las columnas ya se crearon en un intento anterior
+        print("ℹ️ Las columnas ya existen (todo en orden).", flush=True)
 # =====================================================================
 # --- PUENTE DE PERMISOS (CORS) PARA EL FRONTEND DE ALSYS ---
 # =====================================================================
