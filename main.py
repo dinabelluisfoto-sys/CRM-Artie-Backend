@@ -154,6 +154,26 @@ def toggle_bot(telefono: str, db: Session = Depends(get_db)):
     estado_nuevo = "ON" if cliente.bot_activo else "OFF"
     return {"mensaje": f"Artie ahora está {estado_nuevo} para el número {telefono}"}
 
+# --- RUTA PARA LEER EL HISTORIAL DEL CHAT EN EL FRONTEND ---
+@app.get("/api/mensajes/{telefono}")
+def obtener_mensajes_chat(telefono: str, db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.telefono == telefono).first()
+    if not cliente:
+        return []
+    
+    mensajes = db.query(models.Mensaje).filter(models.Mensaje.cliente_id == cliente.id).order_by(models.Mensaje.id.asc()).all()
+    
+    resultados = []
+    for msg in mensajes:
+        resultados.append({
+            "id": msg.id,
+            "remitente": msg.remitente,
+            "tipo_mensaje": msg.tipo_mensaje,
+            "contenido": msg.contenido,
+            "fecha_envio": msg.fecha_envio.isoformat() if msg.fecha_envio else None
+        })
+    return resultados
+
 # --- RUTA WEBHOOK (Para WhatsApp) ---
 
 @app.get("/webhook")
