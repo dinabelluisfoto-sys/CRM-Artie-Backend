@@ -214,16 +214,8 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
             db.commit()
 
             # --- NUEVO: FUNCION INTERNA PARA RESPONDER Y GUARDAR EN LA BD ---
-            # --- NUEVO: FUNCION INTERNA PARA RESPONDER Y GUARDAR EN LA BD ---
             async def responder_bot(texto_respuesta: str, imagen_url: str = None):
-                # 1. Enviar SIEMPRE el texto primero (A prueba de fallos)
-                await enviar_mensaje_whatsapp(numero_cliente, texto_respuesta)
-                msg_bot = models.Mensaje(
-                    cliente_id=cliente.id, remitente="bot", tipo_mensaje="texto", contenido=texto_respuesta
-                )
-                db.add(msg_bot)
-                
-                # 2. Si hay imagen, dispararla como un segundo mensaje independiente
+                # 1. Si hay imagen, dispararla PRIMERO para que quede arriba en el chat
                 if imagen_url:
                     await enviar_imagen_whatsapp(numero_cliente, imagen_url)
                     msg_img = models.Mensaje(
@@ -231,6 +223,13 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                     )
                     db.add(msg_img)
                     
+                # 2. Enviar el texto DESPUÉS para que quede justo abajo con las instrucciones
+                await enviar_mensaje_whatsapp(numero_cliente, texto_respuesta)
+                msg_bot = models.Mensaje(
+                    cliente_id=cliente.id, remitente="bot", tipo_mensaje="texto", contenido=texto_respuesta
+                )
+                db.add(msg_bot)
+                
                 db.commit()
                 
             palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
@@ -259,14 +258,17 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                     db.commit()
                     
                 elif texto_cliente == "2":
-                    # --- OPCIÓN 2: VER PRECIOS (Manda texto detallado + Imagen de precios) ---
-                    respuesta = "¡Aquí tienes nuestra lista oficial de precios mayoristas! 💰✨\n\n"
-                    respuesta += "📌 *Escala de precios por volumen:*\n"
+                    respuesta = "☝️ *Aquí tienes nuestra lista oficial de precios mayoristas.*\n\n"
+                    respuesta += "📌 *Escala por volumen:*\n"
                     respuesta += "📦 *1 Docena (12)*: Q.280 en total\n"
                     respuesta += "📦 *24 a 299 gorras*: Q.17.99 c/u\n"
                     respuesta += "📦 *300 a 499 gorras*: Q.16.00 c/u\n"
                     respuesta += "📦 *500+ gorras*: Q.15.00 c/u\n\n"
-                    respuesta += "¿Deseas iniciar tu pedido ahora? Responde con el número **1**."
+                    respuesta += "💡 **¿Cuántas gorras te gustaría pedir?**\n"
+                    respuesta += "👉 Por favor, responde con el número **1** para iniciar tu pedido y calcular tu total."
+                    
+                    link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
+                    await responder_bot(respuesta, imagen_url=link_precios)
                     
                     # Aquí usamos tu imagen estática de Railway
                     link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
@@ -295,15 +297,13 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                     
                     respuesta = f"Entendido: **{cantidad} Gorras** 🧢\n"
                     respuesta += f"💰 *Tu Inversión: Q. {str_total} (Subtotal: Q.{str_subtotal} + Q.47 envío)*\n\n"
-                    respuesta += "Ahora, dale personalidad. Mira el catálogo 👆 y elige:\n\n"
+                    respuesta += "Ahora, dale personalidad. Mira el catálogo de arriba ☝️ y elige:\n\n"
                     respuesta += "🤍 *Neutros:* Blanco, Negro, Gris Claro, Gris Oscuro.\n"
                     respuesta += "💙 *Azules:* Marino, Rey, Celeste.\n"
                     respuesta += "🌈 *Vivos:* Rosa, Amarillo Mango, Verde Oscuro, Morado.\n"
                     respuesta += "🌸 *Pastel:* Rosa Millenial.\n\n"
-                    respuesta += "**¿Cuál es tu color favorito?** (Escríbelo abajo)"
+                    respuesta += "👉 **¿Cuál es tu color favorito?** *(Escríbelo aquí abajo)*"
                     
-                    # --- NUEVO: ARTIE ENVIA LA FOTO DEL CATALOGO ---
-                    # --- TU NUEVA URL OFICIAL DE RAILWAY ---
                     link_catalogo = "https://crm-artie-backend-production.up.railway.app/static/colores.jpg"
                     await responder_bot(respuesta, imagen_url=link_catalogo)
                     
