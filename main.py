@@ -125,31 +125,24 @@ def listar_pedidos(db: Session = Depends(get_db)):
 # --- RESTRUCURACIÓN DEL DASHBOARD DE CHATS UNIFICADOS ---
 @app.get("/api/dashboard/")
 def obtener_dashboard_chats(db: Session = Depends(get_db)):
-    # 1. Traemos todos los clientes de la base de datos
-    clientes = db.query(models.Cliente).all()
+    # Traemos solo los clientes que NO han sido eliminados de la vista
+    clientes = db.query(models.Cliente).filter(models.Cliente.esta_eliminado == False).all()
     
     resultado_chats = []
-    
     for c in clientes:
-        # 2. Buscamos el ÚLTIMO mensaje de este cliente para mostrarlo en el Sidebar
-        ultimo_msg = db.query(models.Mensaje)\
-                       .filter(models.Mensaje.cliente_id == c.id)\
-                       .order_by(models.Mensaje.id.desc())\
-                       .first()
-                       
+        ultimo_msg = db.query(models.Mensaje).filter(models.Mensaje.cliente_id == c.id).order_by(models.Mensaje.id.desc()).first()
+        
         texto_preview = "Sin mensajes aún"
-        fecha_orden = c.id # Fallback en caso de que no haya mensajes
+        fecha_orden = c.id
         
         if ultimo_msg:
-            texto_preview = ultimo_msg.contenido if ultimo_msg.tipo_mensaje == "text" else "📷 [Imagen adjunta]"
-            fecha_orden = ultimo_msg.id # Usamos el ID del mensaje para ordenar cronológicamente
+            if "[media_id" in ultimo_msg.contenido.lower():
+                texto_preview = "📷 Logo recibido (Mesa de diseño)"
+            else:
+                texto_preview = ultimo_msg.contenido
+            fecha_orden = ultimo_msg.id
             
-        # 3. Buscamos el pedido activo o más reciente para no perder las métricas de dinero y cantidad
-        pedido_reciente = db.query(models.Pedido)\
-                            .filter(models.Pedido.cliente_id == c.id)\
-                            .order_by(models.Pedido.id.desc())\
-                            .first()
-                            
+        pedido_reciente = db.query(models.Pedido).filter(models.Pedido.cliente_id == c.id).order_by(models.Pedido.id.desc()).first()
         total_q = pedido_reciente.total_quetzales if pedido_reciente else 0.0
         cantidad_gorras = pedido_reciente.cantidad if pedido_reciente else 0
         
@@ -158,15 +151,16 @@ def obtener_dashboard_chats(db: Session = Depends(get_db)):
             "cliente_nombre": c.nombre if c.nombre and c.nombre.lower() != "pendiente" else f"+502 {c.telefono}",
             "telefono": c.telefono,
             "bot_activo": c.bot_activo,
-            "estatus": c.paso_embudo.upper(), # Usamos el paso del embudo como estatus del proceso
+            "estatus": c.paso_embudo.upper(),
             "ultimo_mensaje": texto_preview,
             "total_q": f"{total_q:,.2f}",
             "cantidad": cantidad_gorras,
+            "esta_fijado": c.esta_fijado,
             "orden_id": fecha_orden
         })
         
-    # 🔥 ORDENAR: Las conversaciones más recientes aparecerán estrictamente hasta arriba
-    resultado_chats.sort(key=lambda x: x["orden_id"], reverse=True)
+    # 🔥 ORDEN AL ESTILO WHATSAPP: 1ro los fijados, 2do los mensajes más recientes
+    resultado_chats.sort(key=lambda x: (x["esta_fijado"], x["orden_id"]), reverse=True)
     return resultado_chats
 
 # --- RUTA PARA ENCENDER/APAGAR A ARTIE ---
@@ -221,9 +215,7 @@ async def verificar_webhook(request: Request):
 async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
     
-    # Esta función hará todo el trabajo pesado en segundo plano sin hacer esperar a Meta
     async def procesar_flujo():
-        # Creamos una conexión a la base de datos exclusiva para esta tarea
         db = next(get_db()) 
         try:
             entry = data.get("entry", [])[0]
@@ -239,34 +231,52 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                 if tipo_mensaje == "text":
                     texto_cliente = mensaje_info.get("text", {}).get("body", "").strip().lower()
                 elif tipo_mensaje == "image":
-                    texto_cliente = "[imagen adjunta]"
+                    # 🔥 Guardamos temporalmente el ID de Meta para la Fase de Desencriptar Fotos
+                    media_id = mensaje_info.get("image", {}).get("id")
+                    texto_cliente = f"[MEDIA_ID:{media_id}]"
                 
+                # 🔍 LA CLAVE: Buscamos si el número de teléfono YA EXISTE en la base de datos
                 cliente = db.query(models.Cliente).filter(models.Cliente.telefono == numero_cliente).first()
                 
                 if not cliente:
-                    cliente = models.Cliente(nombre="Pendiente", telefono=numero_cliente, nit="CF", bot_activo=True, paso_embudo="inicio")
+                    # Si es totalmente nuevo, lo creamos por primera vez
+                    cliente = models.Cliente(
+                        nombre="Pendiente", 
+                        telefono=numero_cliente, 
+                        nit="CF", 
+                        bot_activo=True, 
+                        paso_embudo="inicio",
+                        esta_fijado=False,
+                        esta_eliminado=False
+                    )
                     db.add(cliente)
                     db.commit()
                     db.refresh(cliente)
+                else:
+                    # Si ya existía y estaba oculto por el botón "eliminar", lo revivimos al recibir mensaje
+                    if cliente.esta_eliminado:
+                        cliente.esta_eliminado = False
+                        db.commit()
 
-                msg_cliente = models.Mensaje(cliente_id=cliente.id, remitente="cliente", tipo_mensaje="texto" if tipo_mensaje == "text" else "imagen", contenido=texto_cliente)
+                # Guardamos el mensaje en el único historial de este cliente
+                msg_cliente = models.Mensaje(
+                    cliente_id=cliente.id, 
+                    remitente="cliente", 
+                    tipo_mensaje="texto" if tipo_mensaje == "text" else "imagen", 
+                    contenido=texto_cliente
+                )
                 db.add(msg_cliente)
                 db.commit()
 
                 # --- MOTOR DE RESPUESTA INTERNO ---
-                # --- MOTOR DE RESPUESTA INTERNO ---
                 async def responder_bot(texto_respuesta: str, imagen_url: str = None):
-                    # 1. Enviar primero la imagen (si existe)
                     if imagen_url:
                         await enviar_imagen_whatsapp(numero_cliente, imagen_url)
                         msg_img = models.Mensaje(cliente_id=cliente.id, remitente="bot", tipo_mensaje="imagen", contenido=imagen_url)
                         db.add(msg_img)
                         db.commit()
-                        
-                        # 🔥 Aumentamos la pausa a 3 segundos para imágenes pesadas
                         await asyncio.sleep(3)
                         
-                    # 2. Enviar después el texto
                     await enviar_mensaje_whatsapp(numero_cliente, texto_respuesta)
                     msg_bot = models.Mensaje(cliente_id=cliente.id, remitente="bot", tipo_mensaje="texto", contenido=texto_respuesta)
                     db.add(msg_bot)
@@ -278,11 +288,11 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     cliente.paso_embudo = "inicio"
                     db.commit()
                     
-                if cliente.bot_activo == False:
-                    print(f"🤫 Artie en silencio. Mensaje de {numero_cliente} para el agente humano.", flush=True)
+                if not cliente.bot_activo:
+                    print(f"🤫 Artie en silencio para el número +502 {numero_cliente}.", flush=True)
                     return 
                     
-                # --- EMBUDO DE VENTAS ---
+                # --- EMBUDO DE VENTAS UNIFICADO ---
                 if cliente.paso_embudo == "inicio":
                     respuesta = "¡Hola! 👋 Bienvenido a La Sanjuanerita. Soy Artie, tu asistente virtual.\n\n¿Listo para destacar tu marca?\n1️⃣ Iniciar mi Pedido\n2️⃣ Ver Precios y Ofertas\n\n*(Responde con el número)*"
                     await responder_bot(respuesta)
@@ -290,8 +300,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     db.commit()
                     
                 elif cliente.paso_embudo == "esperando_opcion":
-                    if texto_cliente == "1":
-                        # OPCIÓN 1: Va directo a pedir, pero le mostramos los precios primero
+                    if texto_cliente == "1" or texto_cliente == "2":
                         respuesta = "¡Excelente decisión! ✨ Para que elijas la mejor opción, aquí tienes nuestra escala de precios:\n\n"
                         respuesta += "📌 *Escala por volumen:*\n"
                         respuesta += "📦 *1 Docena (12)*: Q.280 en total\n"
@@ -299,32 +308,13 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         respuesta += "📦 *300 a 499 gorras*: Q.16.00 c/u\n"
                         respuesta += "📦 *500+ gorras*: Q.15.00 c/u\n\n"
                         respuesta += "💡 **¿Cuántas gorras tienes en mente para tu pedido?**\n"
-                        respuesta += "*(Ej: 1 Docena, 50 unidades, 1 Ciento...)*"
+                        respuesta += "*(Responde directamente con la cantidad, ej: 60, 100, 500...)*"
                         
                         link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
                         await responder_bot(respuesta, imagen_url=link_precios)
                         
                         cliente.paso_embudo = "pidiendo_cantidad"
                         db.commit()
-                        
-                    elif texto_cliente == "2":
-                        # OPCIÓN 2: Quería ver precios. Se los mostramos y lo invitamos a pedir de una vez.
-                        respuesta = "☝️ *Aquí tienes nuestra lista oficial de precios mayoristas.*\n\n"
-                        respuesta += "📌 *Escala por volumen:*\n"
-                        respuesta += "📦 *1 Docena (12)*: Q.280 en total\n"
-                        respuesta += "📦 *24 a 299 gorras*: Q.17.99 c/u\n"
-                        respuesta += "📦 *300 a 499 gorras*: Q.16.00 c/u\n"
-                        respuesta += "📦 *500+ gorras*: Q.15.00 c/u\n\n"
-                        respuesta += "💡 **¿Cuántas gorras te gustaría pedir?**\n"
-                        respuesta += "*(Responde directamente con la cantidad. Ej: 50, 1 Docena, 1 Ciento...)*"
-                        
-                        link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
-                        await responder_bot(respuesta, imagen_url=link_precios)
-                        
-                        # Magia UX: Avanzamos el embudo también aquí para ahorrarle un paso al cliente
-                        cliente.paso_embudo = "pidiendo_cantidad"
-                        db.commit()
-                        
                     else:
                         respuesta = "Por favor, responde únicamente con el número 1 o 2 para continuar."
                         await responder_bot(respuesta)
@@ -336,8 +326,14 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         str_subtotal = f"{subtotal:,.2f}"
                         str_total = f"{total:,.2f}"
                         
-                        nuevo_pedido = models.Pedido(cliente_id=cliente.id, cantidad=cantidad, total_quetzales=total, estatus="EN PROCESO", link_logo="n/a")
-                        db.add(nuevo_pedido)
+                        # Buscamos si ya tiene un pedido en proceso para sobreescribirlo o crear uno nuevo
+                        pedido_existente = db.query(models.Pedido).filter(models.Pedido.cliente_id == cliente.id, models.Pedido.estatus == "EN PROCESO").first()
+                        if pedido_existente:
+                            pedido_existente.cantidad = cantidad
+                            pedido_existente.total_quetzales = total
+                        else:
+                            nuevo_pedido = models.Pedido(cliente_id=cliente.id, cantidad=cantidad, total_quetzales=total, estatus="EN PROCESO", link_logo="n/a")
+                            db.add(nuevo_pedido)
                         
                         respuesta = f"Entendido: **{cantidad} Gorras** 🧢\n"
                         respuesta += f"💰 *Tu Inversión: Q. {str_total} (Subtotal: Q.{str_subtotal} + Q.47 envío)*\n\n"
@@ -358,23 +354,20 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         await responder_bot(respuesta)
 
                 elif cliente.paso_embudo == "pidiendo_color":
-                    color_elegido = texto_cliente.title()
-                    respuesta = f"¡El {color_elegido} es una gran elección! ✨\n\n"
-                    respuesta += "Ahora, la parte más importante: *Tu Marca.*\n"
-                    respuesta += "👉 *Envía la FOTO de tu LOGO aquí.*\n\n"
-                    respuesta += "*(Con esto haremos un \"Pre-diseño Digital\" para que apruebes cómo se ve antes de fabricar).*"
-                    await responder_bot(respuesta)
                     cliente.paso_embudo = "pidiendo_logo"
                     db.commit()
+                    color_elegido = texto_cliente.title()
+                    respuesta = f"¡El {color_elegido} es una gran elección! ✨\n\nNow, la parte más importante: *Tu Marca.*\n👉 *Envía la FOTO de tu LOGO aquí.*\n\n*(Con esto haremos un \"Pre-diseño Digital\" para que apruebes cómo se ve antes de fabricar).*"
+                    await responder_bot(respuesta)
                     
                 elif cliente.paso_embudo == "pidiendo_logo":
-                    if tipo_mensaje == "image" or texto_cliente == "[imagen adjunta]":
+                    if tipo_mensaje == "image" or "[media_id" in texto_cliente:
                         respuesta = "✅ **¡Logo Recibido!**\nYa está con nuestro equipo de diseño. 👨‍🎨\n\nPara formalizar tu orden: **¿A nombre de quién la registramos?** 👤"
                         await responder_bot(respuesta)
                         cliente.paso_embudo = "pidiendo_nombre"
                         db.commit()
                     else:
-                        respuesta = "Aún no detecto la imagen 🤔. Por favor, usa el ícono del clip 📎 o cámara para enviarme la foto de tu logo."
+                        respuesta = "Aún no detecto la imagen 🤔. Por favor, envíame la foto de tu logo."
                         await responder_bot(respuesta)
                         
                 elif cliente.paso_embudo == "pidiendo_nombre":
@@ -392,7 +385,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         cliente.paso_embudo = "pidiendo_nit"
                         db.commit()
                     else:
-                        respuesta = "Ese número no parece tener la cantidad correcta 🤔.\n\nPor favor, escribe un número de teléfono válido de **8 dígitos** para que no haya problemas con tu entrega."
+                        respuesta = "Por favor, escribe un número de teléfono válido de **8 dígitos**."
                         await responder_bot(respuesta)
                     
                 elif cliente.paso_embudo == "pidiendo_nit":
@@ -414,14 +407,11 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     await responder_bot(respuesta)
                     
         except Exception as e:
-            print(f"Error procesando el webhook en background: {e}", flush=True)
+            print(f"Error unificando flujo en background: {e}", flush=True)
         finally:
-            db.close() # Cerramos la sesión de base de datos de forma segura
+            db.close()
 
-    # 🔥 LA MAGIA: Le pasamos la tarea al servidor para que la haga en background
     background_tasks.add_task(procesar_flujo)
-    
-    # Y le respondemos a Meta INMEDIATAMENTE para que no duplique el mensaje
     return {"status": "ok"}
 
 # --- MOTOR DE ENVÍO DE MENSAJES DE TEXTO ---

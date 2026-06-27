@@ -11,6 +11,9 @@ class Cliente(Base):
     nit = Column(String, default="CF")
     bot_activo = Column(Boolean, default=True) 
     paso_embudo = Column(String, default="inicio") 
+    # 🔥 NUEVOS CAMPOS PARA PASO 2 (MENÚ DE CONTEXTO)
+    esta_fijado = Column(Boolean, default=False)
+    esta_eliminado = Column(Boolean, default=False)  # Borrado lógico para ocultar
 
 class Producto(Base):
     __tablename__ = "productos"
