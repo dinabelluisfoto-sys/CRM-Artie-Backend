@@ -162,7 +162,7 @@ def obtener_dashboard_chats(db: Session = Depends(get_db)):
         
         resultado_chats.append({
             "cliente_id": c.id,
-            "cliente_nombre": c.nombre if c.nombre and c.nombre.lower() != "pendiente" else f"+502 {c.telefono}",
+            "cliente_nombre": c.nombre if c.nombre and c.nombre.lower() != "pendiente" else f"+{c.telefono}",
             "telefono": c.telefono,
             "bot_activo": c.bot_activo,
             "estatus": c.paso_embudo.upper(),
