@@ -243,12 +243,24 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     
                 elif cliente.paso_embudo == "esperando_opcion":
                     if texto_cliente == "1":
-                        respuesta = "¡Excelente decisión! ✨\n\nPara calcular tu mejor precio, **¿cuántas gorras tienes en mente?**\n*(Ej: 1 Docena, 50 unidades, 1 Ciento...)*"
-                        await responder_bot(respuesta)
+                        # OPCIÓN 1: Va directo a pedir, pero le mostramos los precios primero
+                        respuesta = "¡Excelente decisión! ✨ Para que elijas la mejor opción, aquí tienes nuestra escala de precios:\n\n"
+                        respuesta += "📌 *Escala por volumen:*\n"
+                        respuesta += "📦 *1 Docena (12)*: Q.280 en total\n"
+                        respuesta += "📦 *24 a 299 gorras*: Q.17.99 c/u\n"
+                        respuesta += "📦 *300 a 499 gorras*: Q.16.00 c/u\n"
+                        respuesta += "📦 *500+ gorras*: Q.15.00 c/u\n\n"
+                        respuesta += "💡 **¿Cuántas gorras tienes en mente para tu pedido?**\n"
+                        respuesta += "*(Ej: 1 Docena, 50 unidades, 1 Ciento...)*"
+                        
+                        link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
+                        await responder_bot(respuesta, imagen_url=link_precios)
+                        
                         cliente.paso_embudo = "pidiendo_cantidad"
                         db.commit()
                         
                     elif texto_cliente == "2":
+                        # OPCIÓN 2: Quería ver precios. Se los mostramos y lo invitamos a pedir de una vez.
                         respuesta = "☝️ *Aquí tienes nuestra lista oficial de precios mayoristas.*\n\n"
                         respuesta += "📌 *Escala por volumen:*\n"
                         respuesta += "📦 *1 Docena (12)*: Q.280 en total\n"
@@ -256,10 +268,14 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         respuesta += "📦 *300 a 499 gorras*: Q.16.00 c/u\n"
                         respuesta += "📦 *500+ gorras*: Q.15.00 c/u\n\n"
                         respuesta += "💡 **¿Cuántas gorras te gustaría pedir?**\n"
-                        respuesta += "👉 Por favor, responde con el número **1** para iniciar tu pedido y calcular tu total."
+                        respuesta += "*(Responde directamente con la cantidad. Ej: 50, 1 Docena, 1 Ciento...)*"
                         
                         link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
                         await responder_bot(respuesta, imagen_url=link_precios)
+                        
+                        # Magia UX: Avanzamos el embudo también aquí para ahorrarle un paso al cliente
+                        cliente.paso_embudo = "pidiendo_cantidad"
+                        db.commit()
                         
                     else:
                         respuesta = "Por favor, responde únicamente con el número 1 o 2 para continuar."
