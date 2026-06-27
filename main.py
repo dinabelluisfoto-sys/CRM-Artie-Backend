@@ -18,6 +18,7 @@ import os
 # Asegúrate de tener una carpeta estática para almacenar temporalmente los pre-diseños
 os.makedirs("static/uploads", exist_ok=True)
 
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
