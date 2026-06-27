@@ -1,9 +1,9 @@
 import os
 import asyncio
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks, UploadFile, File
 from fastapi.responses import PlainTextResponse
-from fastapi.middleware.cors import CORSMiddleware  # <-- IMPORTANTE: Control de accesos web
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List
 import re 
@@ -11,14 +11,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from database import engine, get_db
 import models, schemas
-from fastapi import UploadFile, File
 import shutil
-import os
 
 # Asegúrate de tener una carpeta estática para almacenar temporalmente los pre-diseños
 os.makedirs("static/uploads", exist_ok=True)
 
-app = FastAPI()
+# 1. DECLARACIÓN ÚNICA MAESTRA DE LA APP
+app = FastAPI(title="API CRM Artie", description="Motor de gestión de pedidos con WhatsApp", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,11 +26,30 @@ app.add_middleware(
     allow_methods=["*"],  # Permite GET, POST, etc.
     allow_headers=["*"],
 )
+
 # --- CONFIGURACIÓN DE ARCHIVOS ESTÁTICOS PARA LAS IMÁGENES ---
-# Esto creará una carpeta automática en tu servidor para tus catálogos
 if not os.path.exists("static"):
     os.makedirs("static")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Asegurarnos de que las tablas existan
+models.Base.metadata.create_all(bind=engine)
+
+# 🛠️ PARCHE PARA ACTUALIZAR LA BASE DE DATOS
+@app.on_event("startup")
+def actualizar_base_datos():
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE clientes ADD COLUMN esta_fijado BOOLEAN DEFAULT FALSE;"))
+            conn.execute(text("ALTER TABLE clientes ADD COLUMN esta_eliminado BOOLEAN DEFAULT FALSE;"))
+            print("✅ Base de datos actualizada con nuevas columnas.", flush=True)
+    except Exception as e:
+        print("ℹ️ Las columnas ya existen (todo en orden).", flush=True)
+
+# --- CLASES AUXILIARES ---
+class MensajeEnvio(BaseModel):
+    texto: str
 
 
 # --- MOTOR DE CÁLCULO DE LA SANJUANERITA ---
@@ -51,18 +69,15 @@ def procesar_pedido_gorras(texto_usuario: str):
     else:
         return None 
         
-    # --- LÓGICA DE PRECIOS EXACTA AL CLIENTE ---
     envio = 47.00
     
     if cantidad < 12:
         precio_unitario = 25.00
         subtotal = cantidad * precio_unitario
     elif cantidad == 12:
-        # Precio cerrado por docena exacta
         precio_unitario = 23.33
         subtotal = 280.00
     elif 13 <= cantidad < 24:
-        # Por si piden por ejemplo 15 o 18 gorras, se mantiene la tasa de la docena
         precio_unitario = 23.33
         subtotal = cantidad * precio_unitario
     elif 24 <= cantidad < 300:
@@ -79,6 +94,7 @@ def procesar_pedido_gorras(texto_usuario: str):
     total = round(subtotal + envio, 2)
     
     return cantidad, subtotal, envio, total
+
 
 # --- RUTAS DE CRM (Clientes y Pedidos) ---
 
@@ -121,11 +137,10 @@ def crear_pedido(pedido: schemas.PedidoCreate, db: Session = Depends(get_db)):
 def listar_pedidos(db: Session = Depends(get_db)):
     return db.query(models.Pedido).all()
 
-# --- RUTA PARA EL DASHBOARD ---
-# --- RESTRUCURACIÓN DEL DASHBOARD DE CHATS UNIFICADOS ---
+
+# --- RUTA DEL DASHBOARD DE CHATS ---
 @app.get("/api/dashboard/")
 def obtener_dashboard_chats(db: Session = Depends(get_db)):
-    # Traemos solo los clientes que NO han sido eliminados de la vista
     clientes = db.query(models.Cliente).filter(models.Cliente.esta_eliminado == False).all()
     
     resultado_chats = []
@@ -136,8 +151,8 @@ def obtener_dashboard_chats(db: Session = Depends(get_db)):
         fecha_orden = c.id
         
         if ultimo_msg:
-            if "[media_id" in ultimo_msg.contenido.lower():
-                texto_preview = "📷 Logo recibido (Mesa de diseño)"
+            if "media_id" in ultimo_msg.contenido.lower() or "http" in ultimo_msg.contenido.lower():
+                texto_preview = "📷 Imagen adjunta"
             else:
                 texto_preview = ultimo_msg.contenido
             fecha_orden = ultimo_msg.id
@@ -146,11 +161,9 @@ def obtener_dashboard_chats(db: Session = Depends(get_db)):
         total_q = pedido_reciente.total_quetzales if pedido_reciente else 0.0
         cantidad_gorras = pedido_reciente.cantidad if pedido_reciente else 0
         
-       # 🔥 CLAVE: Forzamos a que si es un chat general, use el número. 
-        # Solo mostrará nombre si tú implementas un botón de guardado manual más adelante.
         resultado_chats.append({
             "cliente_id": c.id,
-            "cliente_nombre": f"+{c.telefono}", # Forzado estilo WhatsApp corporativo
+            "cliente_nombre": f"+{c.telefono}", 
             "telefono": c.telefono,
             "bot_activo": c.bot_activo,
             "estatus": c.paso_embudo.upper(),
@@ -161,7 +174,6 @@ def obtener_dashboard_chats(db: Session = Depends(get_db)):
             "orden_id": fecha_orden
         })
         
-    # 🔥 ORDEN AL ESTILO WHATSAPP: 1ro los fijados, 2do los mensajes más recientes
     resultado_chats.sort(key=lambda x: (x["esta_fijado"], x["orden_id"]), reverse=True)
     return resultado_chats
 
@@ -198,8 +210,66 @@ def obtener_mensajes_chat(telefono: str, db: Session = Depends(get_db)):
         })
     return resultados
 
-# --- RUTA WEBHOOK (Para WhatsApp) ---
 
+# --- RUTAS DE ACCIONES DEL MENÚ (3 PUNTITOS) ---
+@app.post("/api/chat/{cliente_id}/fijar")
+def toggle_fijar_chat(cliente_id: int, db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+    if cliente:
+        cliente.esta_fijado = not cliente.esta_fijado
+        db.commit()
+    return {"status": "ok"}
+
+@app.post("/api/chat/{cliente_id}/eliminar")
+def ocultar_chat(cliente_id: int, db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+    if cliente:
+        cliente.esta_eliminado = True
+        db.commit()
+    return {"status": "ok"}
+
+
+# --- RUTAS DE ENVÍO HUMANO DE MENSAJES Y MEDIOS ---
+@app.post("/api/enviar_mensaje/{cliente_id}")
+async def enviar_mensaje_manual(cliente_id: int, mensaje: MensajeEnvio, db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+    if not cliente:
+        return {"status": "error"}
+    
+    await enviar_mensaje_whatsapp(cliente.telefono, mensaje.texto)
+    
+    msg_humano = models.Mensaje(cliente_id=cliente.id, remitente="humano", tipo_mensaje="texto", contenido=mensaje.texto)
+    db.add(msg_humano)
+    db.commit()
+    return {"status": "ok"}
+
+@app.post("/api/enviar_imagen_humano/{cliente_id}")
+async def enviar_imagen_manual(cliente_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+    if not cliente:
+        return {"status": "error", "message": "Cliente no encontrado"}
+    
+    ruta_archivo = f"static/uploads/{cliente.id}_{file.filename}"
+    with open(ruta_archivo, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    url_publica_imagen = f"https://crm-artie-backend-production.up.railway.app/{ruta_archivo}"
+    
+    await enviar_imagen_whatsapp(cliente.telefono, url_publica_imagen)
+    
+    msg_humano = models.Mensaje(
+        cliente_id=cliente.id, 
+        remitente="humano", 
+        tipo_mensaje="imagen", 
+        contenido=url_publica_imagen
+    )
+    db.add(msg_humano)
+    db.commit()
+    
+    return {"status": "ok", "url": url_publica_imagen}
+
+
+# --- RUTA WEBHOOK (Para WhatsApp) ---
 @app.get("/webhook")
 async def verificar_webhook(request: Request):
     token_servidor = os.getenv("VERIFY_TOKEN")
@@ -233,15 +303,12 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                 if tipo_mensaje == "text":
                     texto_cliente = mensaje_info.get("text", {}).get("body", "").strip().lower()
                 elif tipo_mensaje == "image":
-                    # 🔥 Guardamos temporalmente el ID de Meta para la Fase de Desencriptar Fotos
                     media_id = mensaje_info.get("image", {}).get("id")
                     texto_cliente = f"[MEDIA_ID:{media_id}]"
                 
-                # 🔍 LA CLAVE: Buscamos si el número de teléfono YA EXISTE en la base de datos
                 cliente = db.query(models.Cliente).filter(models.Cliente.telefono == numero_cliente).first()
                 
                 if not cliente:
-                    # Si es totalmente nuevo, lo creamos por primera vez
                     cliente = models.Cliente(
                         nombre="Pendiente", 
                         telefono=numero_cliente, 
@@ -255,12 +322,10 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     db.commit()
                     db.refresh(cliente)
                 else:
-                    # Si ya existía y estaba oculto por el botón "eliminar", lo revivimos al recibir mensaje
                     if cliente.esta_eliminado:
                         cliente.esta_eliminado = False
                         db.commit()
 
-                # Guardamos el mensaje en el único historial de este cliente
                 msg_cliente = models.Mensaje(
                     cliente_id=cliente.id, 
                     remitente="cliente", 
@@ -328,7 +393,6 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         str_subtotal = f"{subtotal:,.2f}"
                         str_total = f"{total:,.2f}"
                         
-                        # Buscamos si ya tiene un pedido en proceso para sobreescribirlo o crear uno nuevo
                         pedido_existente = db.query(models.Pedido).filter(models.Pedido.cliente_id == cliente.id, models.Pedido.estatus == "EN PROCESO").first()
                         if pedido_existente:
                             pedido_existente.cantidad = cantidad
@@ -417,12 +481,10 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
     return {"status": "ok"}
 
 # --- MOTOR DE ENVÍO DE MENSAJES DE TEXTO ---
-# --- MOTOR DE ENVÍO DE MENSAJES DE TEXTO ---
 async def enviar_mensaje_whatsapp(numero_destino: str, texto: str):
     token = os.getenv("WHATSAPP_TOKEN")
     phone_id = os.getenv("PHONE_NUMBER_ID")
     
-    # Usamos la v17.0 que es la más estable a nivel global para mensajería directa
     url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
     
     headers = {
@@ -469,95 +531,4 @@ async def enviar_imagen_whatsapp(numero_destino: str, link_imagen: str, caption:
             if response.status_code != 200:
                 print("Meta rechazó la imagen pero el flujo continúa:", response.text, flush=True)
     except Exception as img_err:
-        # Si el servidor de imágenes falla o hay timeout, la app no se congela
         print(f"Fallo de conexión al enviar imagen: {img_err}", flush=True)
-
-        from pydantic import BaseModel
-
-class MensajeEnvio(BaseModel):
-    texto: str
-
-# 1. RUTA PARA ENVIAR MENSAJES COMO HUMANO
-@app.post("/api/enviar_mensaje/{cliente_id}")
-async def enviar_mensaje_manual(cliente_id: int, mensaje: MensajeEnvio, db: Session = Depends(get_db)):
-    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
-    if not cliente:
-        return {"status": "error"}
-    
-    # Disparamos el mensaje real a WhatsApp
-    await enviar_mensaje_whatsapp(cliente.telefono, mensaje.texto)
-    
-    # Lo guardamos en el historial del CRM
-    msg_humano = models.Mensaje(cliente_id=cliente.id, remitente="humano", tipo_mensaje="texto", contenido=mensaje.texto)
-    db.add(msg_humano)
-    db.commit()
-    return {"status": "ok"}
-
-@app.post("/api/enviar_imagen_humano/{cliente_id}")
-async def enviar_imagen_manual(cliente_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
-    if not cliente:
-        return {"status": "error", "message": "Cliente no encontrado"}
-    
-    # 1. Guardamos el archivo localmente en Railway
-    ruta_archivo = f"static/uploads/{cliente.id}_{file.filename}"
-    with open(ruta_archivo, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-        
-    url_publica_imagen = f"https://crm-artie-backend-production.up.railway.app/{ruta_archivo}"
-    
-    # 2. Disparamos la imagen real por la API de WhatsApp al cliente
-    await enviar_imagen_whatsapp(cliente.telefono, url_publica_imagen)
-    
-    # 3. Guardamos el registro en el historial del chat
-    msg_humano = models.Mensaje(
-        cliente_id=cliente.id, 
-        remitente="humano", 
-        tipo_mensaje="imagen", 
-        contenido=url_publica_imagen
-    )
-    db.add(msg_humano)
-    db.commit()
-    
-    return {"status": "ok", "url": url_publica_imagen}
-
-# Asegurarnos de que las tablas existan
-models.Base.metadata.create_all(bind=engine)
-
-app = FastAPI(title="API CRM Artie", description="Motor de gestión de pedidos con WhatsApp", version="1.2.0")
-# 🛠️ PARCHE PARA ACTUALIZAR LA BASE DE DATOS
-@app.on_event("startup")
-def actualizar_base_datos():
-    from sqlalchemy import text
-    from database import engine # Asegúrate de que esto coincida con cómo importas tu motor
-    
-    try:
-        with engine.begin() as conn:
-            # Obligamos a PostgreSQL a crear las columnas si no existen
-            conn.execute(text("ALTER TABLE clientes ADD COLUMN esta_fijado BOOLEAN DEFAULT FALSE;"))
-            conn.execute(text("ALTER TABLE clientes ADD COLUMN esta_eliminado BOOLEAN DEFAULT FALSE;"))
-            print("✅ Base de datos actualizada con nuevas columnas.", flush=True)
-    except Exception as e:
-        # Si da error, significa que las columnas ya se crearon en un intento anterior
-        print("ℹ️ Las columnas ya existen (todo en orden).", flush=True)
-# =====================================================================
-# --- PUENTE DE PERMISOS (CORS) PARA EL FRONTEND DE ALSYS ---
-# =====================================================================
-
-# 2. RUTA PARA FIJAR CHAT
-@app.post("/api/chat/{cliente_id}/fijar")
-def toggle_fijar_chat(cliente_id: int, db: Session = Depends(get_db)):
-    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
-    if cliente:
-        cliente.esta_fijado = not cliente.esta_fijado
-        db.commit()
-    return {"status": "ok"}
-
-# 3. RUTA PARA ELIMINAR/OCULTAR CHAT
-@app.post("/api/chat/{cliente_id}/eliminar")
-def ocultar_chat(cliente_id: int, db: Session = Depends(get_db)):
-    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
-    if cliente:
-        cliente.esta_eliminado = True
-        db.commit()
-    return {"status": "ok"}
