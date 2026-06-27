@@ -122,24 +122,52 @@ def listar_pedidos(db: Session = Depends(get_db)):
     return db.query(models.Pedido).all()
 
 # --- RUTA PARA EL DASHBOARD ---
+# --- RESTRUCURACIÓN DEL DASHBOARD DE CHATS UNIFICADOS ---
 @app.get("/api/dashboard/")
-def obtener_datos_dashboard(db: Session = Depends(get_db)):
-    pedidos = db.query(models.Pedido, models.Cliente).join(models.Cliente, models.Pedido.cliente_id == models.Cliente.id).order_by(models.Pedido.id.desc()).all()
+def obtener_dashboard_chats(db: Session = Depends(get_db)):
+    # 1. Traemos todos los clientes de la base de datos
+    clientes = db.query(models.Cliente).all()
     
-    resultados = []
-    for pedido, cliente in pedidos:
-        resultados.append({
-            "pedido_id": pedido.id,
-            "fecha": pedido.fecha_pedido.strftime("%Y-%m-%d %H:%M") if pedido.fecha_pedido else "N/A", 
-            "cliente_nombre": cliente.nombre,
-            "telefono": cliente.telefono,
-            "nit": cliente.nit,
-            "cantidad": pedido.cantidad,
-            "total_q": float(pedido.total_quetzales),
-            "estatus": pedido.estatus,
-            "bot_activo": cliente.bot_activo
+    resultado_chats = []
+    
+    for c in clientes:
+        # 2. Buscamos el ÚLTIMO mensaje de este cliente para mostrarlo en el Sidebar
+        ultimo_msg = db.query(models.Mensaje)\
+                       .filter(models.Mensaje.cliente_id == c.id)\
+                       .order_by(models.Mensaje.id.desc())\
+                       .first()
+                       
+        texto_preview = "Sin mensajes aún"
+        fecha_orden = c.id # Fallback en caso de que no haya mensajes
+        
+        if ultimo_msg:
+            texto_preview = ultimo_msg.contenido if ultimo_msg.tipo_mensaje == "text" else "📷 [Imagen adjunta]"
+            fecha_orden = ultimo_msg.id # Usamos el ID del mensaje para ordenar cronológicamente
+            
+        # 3. Buscamos el pedido activo o más reciente para no perder las métricas de dinero y cantidad
+        pedido_reciente = db.query(models.Pedido)\
+                            .filter(models.Pedido.cliente_id == c.id)\
+                            .order_by(models.Pedido.id.desc())\
+                            .first()
+                            
+        total_q = pedido_reciente.total_quetzales if pedido_reciente else 0.0
+        cantidad_gorras = pedido_reciente.cantidad if pedido_reciente else 0
+        
+        resultado_chats.append({
+            "cliente_id": c.id,
+            "cliente_nombre": c.nombre if c.nombre and c.nombre.lower() != "pendiente" else f"+502 {c.telefono}",
+            "telefono": c.telefono,
+            "bot_activo": c.bot_activo,
+            "estatus": c.paso_embudo.upper(), # Usamos el paso del embudo como estatus del proceso
+            "ultimo_mensaje": texto_preview,
+            "total_q": f"{total_q:,.2f}",
+            "cantidad": cantidad_gorras,
+            "orden_id": fecha_orden
         })
-    return resultados
+        
+    # 🔥 ORDENAR: Las conversaciones más recientes aparecerán estrictamente hasta arriba
+    resultado_chats.sort(key=lambda x: x["orden_id"], reverse=True)
+    return resultado_chats
 
 # --- RUTA PARA ENCENDER/APAGAR A ARTIE ---
 @app.post("/api/toggle_bot/{telefono}")
