@@ -252,14 +252,27 @@ async def recibir_mensajes(request: Request, db: Session = Depends(get_db)):
                 
             elif cliente.paso_embudo == "esperando_opcion":
                 if texto_cliente == "1":
-                    respuesta = "¡Aquí tienes nuestra lista oficial de precios mayoristas! 💰✨"
-                    link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
-                    await responder_bot(respuesta, imagen_url=link_precios)
+                    # --- OPCIÓN 1: INICIAR PEDIDO (Va directo a pedir cantidad sin imagen) ---
+                    respuesta = "¡Excelente decisión! ✨\n\nPara calcular tu mejor precio, **¿cuántas gorras tienes en mente?**\n*(Ej: 1 Docena, 50 unidades, 1 Ciento...)*"
+                    await responder_bot(respuesta)
                     cliente.paso_embudo = "pidiendo_cantidad"
                     db.commit()
+                    
                 elif texto_cliente == "2":
-                    respuesta = "Actualmente manejamos Gorras Trucker desde Q.17.99 c/u (precio mayorista). ¿Deseas iniciar tu pedido respondiendo '1'?"
-                    await responder_bot(respuesta)
+                    # --- OPCIÓN 2: VER PRECIOS (Manda texto detallado + Imagen de precios) ---
+                    respuesta = "¡Aquí tienes nuestra lista oficial de precios mayoristas! 💰✨\n\n"
+                    respuesta += "📌 *Escala de precios por volumen:*\n"
+                    respuesta += "📦 *1 Docena (12)*: Q.280 en total\n"
+                    respuesta += "📦 *24 a 299 gorras*: Q.17.99 c/u\n"
+                    respuesta += "📦 *300 a 499 gorras*: Q.16.00 c/u\n"
+                    respuesta += "📦 *500+ gorras*: Q.15.00 c/u\n\n"
+                    respuesta += "¿Deseas iniciar tu pedido ahora? Responde con el número **1**."
+                    
+                    # Aquí usamos tu imagen estática de Railway
+                    link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
+                    await responder_bot(respuesta, imagen_url=link_precios)
+                    # Nota: NO cambiamos el paso del embudo aquí, para que siga esperando que presione 1.
+                    
                 else:
                     respuesta = "Por favor, responde únicamente con el número 1 o 2 para continuar."
                     await responder_bot(respuesta)
