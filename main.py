@@ -1,4 +1,5 @@
 import os
+import asyncio
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks
 from fastapi.responses import PlainTextResponse
@@ -205,6 +206,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                 db.commit()
 
                 # --- MOTOR DE RESPUESTA INTERNO ---
+                # --- MOTOR DE RESPUESTA INTERNO ---
                 async def responder_bot(texto_respuesta: str, imagen_url: str = None):
                     # 1. Enviar primero la imagen (si existe)
                     if imagen_url:
@@ -212,6 +214,9 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         msg_img = models.Mensaje(cliente_id=cliente.id, remitente="bot", tipo_mensaje="imagen", contenido=imagen_url)
                         db.add(msg_img)
                         db.commit()
+                        
+                        # 🔥 Aumentamos la pausa a 3 segundos para imágenes pesadas
+                        await asyncio.sleep(3)
                         
                     # 2. Enviar después el texto
                     await enviar_mensaje_whatsapp(numero_cliente, texto_respuesta)
