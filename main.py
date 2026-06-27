@@ -18,56 +18,7 @@ import os
 # Asegúrate de tener una carpeta estática para almacenar temporalmente los pre-diseños
 os.makedirs("static/uploads", exist_ok=True)
 
-@app.post("/api/enviar_imagen_humano/{cliente_id}")
-async def enviar_imagen_manual(cliente_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
-    if not cliente:
-        return {"status": "error", "message": "Cliente no encontrado"}
-    
-    # 1. Guardamos el archivo localmente en Railway
-    ruta_archivo = f"static/uploads/{cliente.id}_{file.filename}"
-    with open(ruta_archivo, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-        
-    url_publica_imagen = f"https://crm-artie-backend-production.up.railway.app/{ruta_archivo}"
-    
-    # 2. Disparamos la imagen real por la API de WhatsApp al cliente
-    await enviar_imagen_whatsapp(cliente.telefono, url_publica_imagen)
-    
-    # 3. Guardamos el registro en el historial del chat
-    msg_humano = models.Mensaje(
-        cliente_id=cliente.id, 
-        remitente="humano", 
-        tipo_mensaje="imagen", 
-        contenido=url_publica_imagen
-    )
-    db.add(msg_humano)
-    db.commit()
-    
-    return {"status": "ok", "url": url_publica_imagen}
 
-# Asegurarnos de que las tablas existan
-models.Base.metadata.create_all(bind=engine)
-
-app = FastAPI(title="API CRM Artie", description="Motor de gestión de pedidos con WhatsApp", version="1.2.0")
-# 🛠️ PARCHE PARA ACTUALIZAR LA BASE DE DATOS
-@app.on_event("startup")
-def actualizar_base_datos():
-    from sqlalchemy import text
-    from database import engine # Asegúrate de que esto coincida con cómo importas tu motor
-    
-    try:
-        with engine.begin() as conn:
-            # Obligamos a PostgreSQL a crear las columnas si no existen
-            conn.execute(text("ALTER TABLE clientes ADD COLUMN esta_fijado BOOLEAN DEFAULT FALSE;"))
-            conn.execute(text("ALTER TABLE clientes ADD COLUMN esta_eliminado BOOLEAN DEFAULT FALSE;"))
-            print("✅ Base de datos actualizada con nuevas columnas.", flush=True)
-    except Exception as e:
-        # Si da error, significa que las columnas ya se crearon en un intento anterior
-        print("ℹ️ Las columnas ya existen (todo en orden).", flush=True)
-# =====================================================================
-# --- PUENTE DE PERMISOS (CORS) PARA EL FRONTEND DE ALSYS ---
-# =====================================================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Permite que tu index.html local lea los datos de Railway
@@ -540,6 +491,57 @@ async def enviar_mensaje_manual(cliente_id: int, mensaje: MensajeEnvio, db: Sess
     db.add(msg_humano)
     db.commit()
     return {"status": "ok"}
+
+@app.post("/api/enviar_imagen_humano/{cliente_id}")
+async def enviar_imagen_manual(cliente_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+    if not cliente:
+        return {"status": "error", "message": "Cliente no encontrado"}
+    
+    # 1. Guardamos el archivo localmente en Railway
+    ruta_archivo = f"static/uploads/{cliente.id}_{file.filename}"
+    with open(ruta_archivo, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    url_publica_imagen = f"https://crm-artie-backend-production.up.railway.app/{ruta_archivo}"
+    
+    # 2. Disparamos la imagen real por la API de WhatsApp al cliente
+    await enviar_imagen_whatsapp(cliente.telefono, url_publica_imagen)
+    
+    # 3. Guardamos el registro en el historial del chat
+    msg_humano = models.Mensaje(
+        cliente_id=cliente.id, 
+        remitente="humano", 
+        tipo_mensaje="imagen", 
+        contenido=url_publica_imagen
+    )
+    db.add(msg_humano)
+    db.commit()
+    
+    return {"status": "ok", "url": url_publica_imagen}
+
+# Asegurarnos de que las tablas existan
+models.Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title="API CRM Artie", description="Motor de gestión de pedidos con WhatsApp", version="1.2.0")
+# 🛠️ PARCHE PARA ACTUALIZAR LA BASE DE DATOS
+@app.on_event("startup")
+def actualizar_base_datos():
+    from sqlalchemy import text
+    from database import engine # Asegúrate de que esto coincida con cómo importas tu motor
+    
+    try:
+        with engine.begin() as conn:
+            # Obligamos a PostgreSQL a crear las columnas si no existen
+            conn.execute(text("ALTER TABLE clientes ADD COLUMN esta_fijado BOOLEAN DEFAULT FALSE;"))
+            conn.execute(text("ALTER TABLE clientes ADD COLUMN esta_eliminado BOOLEAN DEFAULT FALSE;"))
+            print("✅ Base de datos actualizada con nuevas columnas.", flush=True)
+    except Exception as e:
+        # Si da error, significa que las columnas ya se crearon en un intento anterior
+        print("ℹ️ Las columnas ya existen (todo en orden).", flush=True)
+# =====================================================================
+# --- PUENTE DE PERMISOS (CORS) PARA EL FRONTEND DE ALSYS ---
+# =====================================================================
 
 # 2. RUTA PARA FIJAR CHAT
 @app.post("/api/chat/{cliente_id}/fijar")
