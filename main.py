@@ -190,16 +190,24 @@ def obtener_dashboard_chats(db: Session = Depends(get_db)):
     return resultado_chats
 
 # --- RUTA PARA ENCENDER/APAGAR A ARTIE ---
+# --- RUTA PARA ENCENDER/APAGAR A ARTIE Y REINICIAR EMBÚDO ---
 @app.post("/api/toggle_bot/{telefono}")
 def toggle_bot(telefono: str, db: Session = Depends(get_db)):
     cliente = db.query(models.Cliente).filter(models.Cliente.telefono == telefono).first()
     if not cliente:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
     
+    # Invertimos el estado (Si estaba apagado, se enciende)
     cliente.bot_activo = not cliente.bot_activo
+    
+    # 🔥 LA MAGIA DEL RESET: Si el dueño vuelve a ENCENDER a Artie, 
+    # asumimos que el pedido anterior ya se entregó y preparamos al bot para un NUEVO PEDIDO.
+    if cliente.bot_activo:
+        cliente.paso_embudo = "inicio"
+        
     db.commit()
     
-    estado_nuevo = "ON" if cliente.bot_activo else "OFF"
+    estado_nuevo = "ON (Memoria reiniciada)" if cliente.bot_activo else "OFF"
     return {"mensaje": f"Artie ahora está {estado_nuevo} para el número {telefono}"}
 
 # --- RUTA PARA LEER EL HISTORIAL DEL CHAT EN EL FRONTEND ---
