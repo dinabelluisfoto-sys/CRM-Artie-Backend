@@ -204,6 +204,7 @@ def toggle_bot(telefono: str, db: Session = Depends(get_db)):
     # asumimos que el pedido anterior ya se entregó y preparamos al bot para un NUEVO PEDIDO.
     if cliente.bot_activo:
         cliente.paso_embudo = "inicio"
+        cliente.cantidad = None # <-- ESTA ES LA CLAVE: Borramos las "500 gorras" de la base de datos
         
     db.commit()
     
