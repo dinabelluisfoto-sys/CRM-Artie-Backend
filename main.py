@@ -174,7 +174,8 @@ def obtener_dashboard_chats(db: Session = Depends(get_db)):
         
         resultado_chats.append({
             "cliente_id": c.id,
-            "cliente_nombre": f"+{c.telefono}", 
+            # Si tiene nombre real úsalo, de lo contrario muestra el número limpio
+            "cliente_nombre": c.nombre if c.nombre and c.nombre.lower() != "pendiente" else f"+{c.telefono}", 
             "telefono": c.telefono,
             "bot_activo": c.bot_activo,
             "estatus": c.paso_embudo.upper(),
@@ -405,6 +406,13 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     msg_bot = models.Mensaje(cliente_id=cliente.id, remitente="bot", tipo_mensaje="texto", contenido=texto_respuesta)
                     db.add(msg_bot)
                     db.commit()
+
+                # --- ESCUDO DE INTERVENCIÓN HUMANA ---
+                # Si el pedido ya se confirmó, bloqueamos al bot por completo
+                if cliente.paso_embudo == "completado":
+                    cliente.bot_activo = False
+                    db.commit()
+                    return # Cortamos la ejecución aquí. El bot se queda mudo.    
 
                 palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
                 if texto_cliente in palabras_reinicio:
