@@ -50,6 +50,8 @@ def actualizar_base_datos():
 # --- CLASES AUXILIARES ---
 class MensajeEnvio(BaseModel):
     texto: str
+class ActualizarNombre(BaseModel):
+    nombre: str
 
 
 # --- MOTOR DE CÁLCULO DE LA SANJUANERITA ---
@@ -97,6 +99,15 @@ def procesar_pedido_gorras(texto_usuario: str):
 
 
 # --- RUTAS DE CRM (Clientes y Pedidos) ---
+
+@app.put("/api/cliente/{cliente_id}/nombre")
+def guardar_nombre_manual(cliente_id: int, datos: ActualizarNombre, db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+    if cliente:
+        cliente.nombre = datos.nombre
+        db.commit()
+        return {"status": "ok", "nuevo_nombre": cliente.nombre}
+    raise HTTPException(status_code=404, detail="Cliente no encontrado")
 
 @app.get("/")
 def ruta_raiz():
