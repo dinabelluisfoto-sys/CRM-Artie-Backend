@@ -510,8 +510,14 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         await responder_bot(respuesta)
                         
                 elif cliente.paso_embudo == "pidiendo_nombre":
-                    cliente.nombre = texto_cliente.title()
-                    respuesta = f"Un gusto, {cliente.nombre}. 🤝\n📞 **¿A qué número de teléfono te podemos llamar para confirmar el diseño?**"
+                    nombre_pedido = texto_cliente.title()
+                    
+                    # 🔥 ESCUDO DE IDENTIDAD: Solo guardamos el nombre si el contacto es "Pendiente" o no tiene nombre.
+                    # Si el dueño ya lo guardó manualmente en la agenda, respetamos el nombre del dueño.
+                    if not cliente.nombre or cliente.nombre.lower() == "pendiente":
+                        cliente.nombre = nombre_pedido
+                        
+                    respuesta = f"Un gusto, {nombre_pedido}. 🤝\n📞 **¿A qué número de teléfono te podemos llamar para confirmar el diseño?**"
                     await responder_bot(respuesta)
                     cliente.paso_embudo = "pidiendo_telefono"
                     db.commit()
@@ -529,6 +535,16 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     
                 elif cliente.paso_embudo == "pidiendo_nit":
                     cliente.nit = texto_cliente.upper()
+                    
+                    # 🧠 Psicología de ventas: Sentido de pertenencia y seguridad
+                    respuesta = "¡Excelente! 📝\nPara asegurar que tu pedido llegue directo a tus manos y sin contratiempos, **¿cuál es la dirección exacta donde deseas recibir esta entrega especial?** 🚚📍\n*(Por favor, incluye referencias o municipio)*"
+                    await responder_bot(respuesta)
+                    
+                    cliente.paso_embudo = "pidiendo_direccion"
+                    db.commit()
+                    
+                elif cliente.paso_embudo == "pidiendo_direccion":
+                    # El cliente ya dio su dirección (queda guardada en el historial del chat)
                     cliente.bot_activo = False
                     cliente.paso_embudo = "completado"
                     
