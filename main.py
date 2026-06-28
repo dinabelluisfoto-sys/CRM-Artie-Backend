@@ -268,6 +268,42 @@ async def enviar_imagen_manual(cliente_id: int, file: UploadFile = File(...), db
     
     return {"status": "ok", "url": url_publica_imagen}
 
+# --- MOTOR PARA DESCARGAR IMÁGENES DESDE META ---
+async def descargar_media_whatsapp(media_id: str) -> str:
+    token = os.getenv("WHATSAPP_TOKEN")
+    
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            # 1. Le pedimos a Meta la URL de descarga secreta de ese Media ID
+            url_meta = f"https://graph.facebook.com/v17.0/{media_id}"
+            response = await client.get(url_meta, headers=headers)
+            
+            if response.status_code == 200:
+                datos_media = response.json()
+                url_descarga = datos_media.get("url")
+                
+                # 2. Con la URL secreta, descargamos la imagen real (los bytes)
+                archivo_response = await client.get(url_descarga, headers=headers)
+                
+                if archivo_response.status_code == 200:
+                    # Guardamos la imagen con su ID como nombre en tu carpeta de Railway
+                    nombre_archivo = f"static/uploads/client_logo_{media_id}.jpg"
+                    with open(nombre_archivo, "wb") as f:
+                        f.write(archivo_response.content)
+                    
+                    # Retornamos el link público definitivo para tu CRM
+                    return f"https://crm-artie-backend-production.up.railway.app/{nombre_archivo}"
+            
+            print(f"Error al obtener URL de Meta para ID {media_id}: {response.text}", flush=True)
+            return None
+        except Exception as e:
+            print(f"Excepción al descargar media de WhatsApp: {e}", flush=True)
+            return None
+
 
 # --- RUTA WEBHOOK (Para WhatsApp) ---
 @app.get("/webhook")
@@ -304,7 +340,17 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     texto_cliente = mensaje_info.get("text", {}).get("body", "").strip().lower()
                 elif tipo_mensaje == "image":
                     media_id = mensaje_info.get("image", {}).get("id")
-                    texto_cliente = f"[MEDIA_ID:{media_id}]"
+                    print(f"📷 Detectado Media ID de Meta: {media_id}. Iniciando descarga...", flush=True)
+                    
+                    # Llamamos al motor que acabamos de crear
+                    url_descargada = await descargar_media_whatsapp(media_id)
+                    
+                    if url_descargada:
+                        # Reemplazamos el texto crudo por la URL real para que el historial lo pinte como foto
+                        texto_cliente = url_descargada
+                        print(f"✅ Logo descargado y guardado en: {url_descargada}", flush=True)
+                    else:
+                        texto_cliente = f"[Error al descargar Logo ID: {media_id}]"
                 
                 cliente = db.query(models.Cliente).filter(models.Cliente.telefono == numero_cliente).first()
                 
