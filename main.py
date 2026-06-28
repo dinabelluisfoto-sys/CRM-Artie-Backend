@@ -496,7 +496,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     cliente.paso_embudo = "pidiendo_logo"
                     db.commit()
                     color_elegido = texto_cliente.title()
-                    respuesta = f"¡El {color_elegido} es una gran elección! ✨\n\nNow, la parte más importante: *Tu Marca.*\n👉 *Envía la FOTO de tu LOGO aquí.*\n\n*(Con esto haremos un \"Pre-diseño Digital\" para que apruebes cómo se ve antes de fabricar).*"
+                    respuesta = f"¡El {color_elegido} es una gran elección! ✨\n\nAhora, la parte más importante: *Tu Marca.*\n👉 *Envía la FOTO de tu LOGO aquí.*\n\n*(Con esto haremos un \"Pre-diseño Digital\" para que apruebes cómo se ve antes de fabricar).*"
                     await responder_bot(respuesta)
                     
                 elif cliente.paso_embudo == "pidiendo_logo":
