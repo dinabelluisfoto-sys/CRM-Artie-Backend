@@ -1,7 +1,7 @@
 import os
 import asyncio
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -60,6 +60,38 @@ class ContactoSchema(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str    
+
+# --- MOTOR WEBSOCKETS (TIEMPO REAL) ---
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except:
+                pass
+
+manager = ConnectionManager()
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Mantiene el túnel abierto escuchando
+            data = await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)    
 
 # --- MOTOR DE CÁLCULO DE LA SANJUANERITA ---
 def procesar_pedido_gorras(texto_usuario: str):
@@ -633,7 +665,8 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
             print(f"Error unificando flujo en background: {e}", flush=True)
         finally:
             db.close()
-
+            # 🔥 Lanzamos el pulso a todas las pantallas conectadas
+            await manager.broadcast("nuevo_mensaje_recibido")
     background_tasks.add_task(procesar_flujo)
     return {"status": "ok"}
 
