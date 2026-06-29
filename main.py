@@ -1,6 +1,7 @@
 import os
 import asyncio
 import httpx
+import json # <-- NUEVO: Para crear la ficha fantasma
 from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,10 +14,8 @@ from database import engine, get_db
 import models, schemas
 import shutil
 
-# Asegúrate de tener una carpeta estática para almacenar temporalmente los pre-diseños
 os.makedirs("static/uploads", exist_ok=True)
 
-# 1. DECLARACIÓN ÚNICA MAESTRA DE LA APP
 app = FastAPI(title="API CRM Artie", description="Motor de gestión de pedidos con WhatsApp", version="1.2.0")
 
 app.add_middleware(
@@ -27,15 +26,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN DE ARCHIVOS ESTÁTICOS PARA LAS IMÁGENES ---
 if not os.path.exists("static"):
     os.makedirs("static")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Asegurarnos de que las tablas existan
 models.Base.metadata.create_all(bind=engine)
 
-# 🛠️ PARCHE PARA ACTUALIZAR LA BASE DE DATOS
 @app.on_event("startup")
 def actualizar_base_datos():
     from sqlalchemy import text
@@ -47,21 +43,17 @@ def actualizar_base_datos():
     except Exception as e:
         print("ℹ️ Las columnas ya existen (todo en orden).", flush=True)
 
-# --- CLASES AUXILIARES ---
 class MensajeEnvio(BaseModel):
     texto: str
 class ActualizarNombre(BaseModel):
     nombre: str
-
 class ContactoSchema(BaseModel):
     nombre: str
     telefono: str
-
 class LoginRequest(BaseModel):
     username: str
     password: str    
 
-# --- MOTOR WEBSOCKETS (TIEMPO REAL) ---
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -93,7 +85,6 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)    
 
-# --- MOTOR DE CÁLCULO GORRA PRINT (NUEVOS PRECIOS) ---
 def procesar_pedido_gorras(texto_usuario: str):
     texto = texto_usuario.lower()
     cantidad = 0
@@ -140,7 +131,6 @@ def procesar_pedido_gorras(texto_usuario: str):
     return cantidad, subtotal, envio, total
 
 
-# --- RUTAS DE CRM (Clientes y Pedidos) ---
 @app.put("/api/cliente/{cliente_id}/nombre")
 def guardar_nombre_manual(cliente_id: int, datos: ActualizarNombre, db: Session = Depends(get_db)):
     cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
@@ -238,14 +228,13 @@ def listar_pedidos(db: Session = Depends(get_db)):
     return db.query(models.Pedido).all()
 
 
-# --- RUTA DEL DASHBOARD DE CHATS ---
 @app.get("/api/dashboard/")
 def obtener_dashboard_chats(db: Session = Depends(get_db)):
     clientes = db.query(models.Cliente).filter(models.Cliente.esta_eliminado == False).all()
     
     resultado_chats = []
     for c in clientes:
-        ultimo_msg = db.query(models.Mensaje).filter(models.Mensaje.cliente_id == c.id).order_by(models.Mensaje.id.desc()).first()
+        ultimo_msg = db.query(models.Mensaje).filter(models.Mensaje.cliente_id == c.id, models.Mensaje.remitente != "sistema").order_by(models.Mensaje.id.desc()).first()
         
         texto_preview = "Sin mensajes aún"
         fecha_orden = c.id
@@ -452,13 +441,10 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     db.refresh(cliente)
                 else:
                     if cliente.esta_eliminado:
-                        # 🧹 BORRÓN Y CUENTA NUEVA: El cliente regresa, borramos el pasado
                         cliente.esta_eliminado = False
                         cliente.nombre = "Pendiente"
                         cliente.bot_activo = True
                         cliente.paso_embudo = "inicio"
-                        
-                        # Limpiamos el historial viejo
                         db.query(models.Mensaje).filter(models.Mensaje.cliente_id == cliente.id).delete()
                         db.commit()
 
@@ -500,7 +486,6 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                 if not cliente.bot_activo:
                     return 
                     
-                # --- EMBUDO DE NEURO-VENTAS GORRA PRINT ---
                 if cliente.paso_embudo == "inicio":
                     respuesta = "¡Hola! 👋 Qué alegría saludarte. Soy Artie, el asistente virtual de Gorra Print.\n\nEstás en el lugar correcto para darle vida a tu marca. Para darte el mejor servicio, cuéntame:\n\n1️⃣ Iniciar mi Cotización / Pedido\n2️⃣ Ver Tabla de Precios y Ofertas\n\n*(Responde con el número)*"
                     await responder_bot(respuesta)
@@ -527,13 +512,11 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         respuesta = "Por favor, responde únicamente con el número 1 o 2 para continuar."
                         await responder_bot(respuesta)
                         
-                # 🔥 COMBINACIÓN MAGISTRAL: "pidiendo_cantidad" y "confirmando_upsell"
                 elif cliente.paso_embudo == "pidiendo_cantidad" or cliente.paso_embudo == "confirmando_upsell":
                     calculo = procesar_pedido_gorras(texto_cliente)
                     if calculo:
                         cantidad, subtotal, envio, total = calculo
                         
-                        # 💡 LÓGICA DE UPSELL (Solo si viene por primera vez, no si ya está confirmando)
                         if cliente.paso_embudo == "pidiendo_cantidad" and 19 <= cantidad <= 23:
                             respuesta = f"Noté que tienes en mente {cantidad} gorras. 💡 *Consejo corporativo:* Si ajustas tu pedido a **24 gorras**, se activa nuestro descuento de mayoreo (Q.18 c/u).\n\n"
                             respuesta += "¡Llevarás más unidades por una inversión casi idéntica!\n\n"
@@ -542,9 +525,8 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                             await responder_bot(respuesta)
                             cliente.paso_embudo = "confirmando_upsell"
                             db.commit()
-                            return # Pausamos el embudo hasta que decida
+                            return 
                             
-                        # Flujo Normal o Upsell Aceptado
                         str_subtotal = f"{subtotal:,.2f}"
                         str_total = f"{total:,.2f}"
                         
@@ -558,7 +540,6 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         
                         respuesta = f"¡Excelente inversión! 🤝\n\n"
                         respuesta += f"🧢 *Cantidad:* {cantidad} Gorras Trucker\n"
-                        # 🔥 Corrección de Transparencia en Subtotal y Envío
                         respuesta += f"💰 *Total a Pagar:* Q. {str_total} *(Subtotal: Q.{str_subtotal} + Q.47.00 de envío a todo el país y pago contra-entrega)*\n\n"
                         respuesta += "Ya tenemos la base de tu pedido asegurada. 🎯\n"
                         respuesta += "Ahora, elijamos el lienzo perfecto para destacar tu marca. 🎨 Abre la imagen de arriba y descubre nuestros 16 colores disponibles (Frente blanco listos para tu logo / Malla de color):\n\n"
@@ -599,8 +580,6 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         
                 elif cliente.paso_embudo == "pidiendo_nombre":
                     nombre_pedido = texto_cliente.title()
-                    
-                    # 🔥 Prioridad de nombre: El cliente manda y sobrescribe SIEMPRE su nombre
                     cliente.nombre = nombre_pedido
                         
                     respuesta = f"Un gusto saludarte, {nombre_pedido}. 🤝\n📞 **¿A qué número de teléfono te puede contactar nuestro equipo de mensajería para coordinar la entrega?**"
@@ -636,14 +615,49 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     if pedido_actual:
                         pedido_actual.estatus = "NUEVO"
                         
-                    db.commit()
-                    
+                    # 🔥 EL RECIBO DIGITAL PARA EL CLIENTE
                     respuesta = f"🎉 **¡Tu pedido está en marcha, {cliente.nombre}!**\n\n"
+                    respuesta += "Aquí tienes el resumen oficial de tu orden para que todo quede súper claro:\n\n"
+                    respuesta += "🧾 **RESUMEN DE ORDEN:**\n"
+                    respuesta += f"👤 *A nombre de:* {cliente.nombre}\n"
+                    respuesta += f"🧢 *Cantidad:* {pedido_actual.cantidad if pedido_actual else 'N/A'} Gorras Trucker\n"
+                    respuesta += f"💰 *Total a Pagar:* Q. {pedido_actual.total_quetzales if pedido_actual else 'N/A'}\n"
+                    respuesta += f"📍 *Dirección:* {texto_cliente}\n"
+                    respuesta += f"📝 *NIT:* {cliente.nit}\n\n"
                     respuesta += "📦 *Estado actual:* Orden registrada y enviada a mesa de diseño.\n"
                     respuesta += "💳 *Método de Pago:* Pago contra-entrega (Pagas al recibir).\n\n"
                     respuesta += "⏳ *Siguiente paso:* Un asesor humano de Gorra Print te escribirá en este mismo chat enviándote tu *Pre-diseño Digital* para tu aprobación final.\n\n"
                     respuesta += "¡Gracias por confiar en *Gorra Print*! Estamos emocionados de trabajar en tu marca. 🧢🔥"
                     await responder_bot(respuesta)
+                    
+                    # 🔥 LA MAGIA: LA FICHA DE PRODUCCIÓN EN SECRETO PARA EL CRM
+                    ultimo_logo = db.query(models.Mensaje).filter(
+                        models.Mensaje.cliente_id == cliente.id,
+                        models.Mensaje.remitente == "cliente",
+                        models.Mensaje.tipo_mensaje == "imagen"
+                    ).order_by(models.Mensaje.id.desc()).first()
+                    
+                    url_del_logo = ultimo_logo.contenido if ultimo_logo else "#"
+                    
+                    datos_ficha = {
+                        "tipo": "ficha_produccion",
+                        "cliente": cliente.nombre,
+                        "telefono": cliente.telefono,
+                        "nit": cliente.nit,
+                        "direccion": texto_cliente,
+                        "cantidad": pedido_actual.cantidad if pedido_actual else 0,
+                        "total": f"{pedido_actual.total_quetzales:,.2f}" if pedido_actual else "0.00",
+                        "logo_url": url_del_logo
+                    }
+                    
+                    msg_sistema = models.Mensaje(
+                        cliente_id=cliente.id, 
+                        remitente="sistema", 
+                        tipo_mensaje="ficha", 
+                        contenido=json.dumps(datos_ficha)
+                    )
+                    db.add(msg_sistema)
+                    db.commit()
                     
         except Exception as e:
             print(f"Error unificando flujo en background: {e}", flush=True)
@@ -654,7 +668,6 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
     background_tasks.add_task(procesar_flujo)
     return {"status": "ok"}
 
-# --- MOTOR DE ENVÍO DE MENSAJES DE TEXTO ---
 async def enviar_mensaje_whatsapp(numero_destino: str, texto: str):
     token = os.getenv("WHATSAPP_TOKEN")
     phone_id = os.getenv("PHONE_NUMBER_ID")
@@ -678,7 +691,6 @@ async def enviar_mensaje_whatsapp(numero_destino: str, texto: str):
         if response.status_code != 200:
             print("Error detallado de Meta (Texto):", response.text, flush=True)
 
-# --- MOTOR DE ENVÍO DE IMÁGENES BLINDADO ---
 async def enviar_imagen_whatsapp(numero_destino: str, link_imagen: str, caption: str = ""):
     token = os.getenv("WHATSAPP_TOKEN")
     phone_id = os.getenv("PHONE_NUMBER_ID")
