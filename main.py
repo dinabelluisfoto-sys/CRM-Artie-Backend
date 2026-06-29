@@ -96,7 +96,7 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)    
 
-# --- MOTOR DE CÁLCULO DE LA SANJUANERITA ---
+# --- MOTOR DE CÁLCULO GORRA PRINT ---
 def procesar_pedido_gorras(texto_usuario: str):
     texto = texto_usuario.lower()
     cantidad = 0
@@ -291,7 +291,6 @@ def obtener_dashboard_chats(db: Session = Depends(get_db)):
     resultado_chats.sort(key=lambda x: (x["esta_fijado"], x["orden_id"]), reverse=True)
     return resultado_chats
 
-# --- RUTA PARA ENCENDER/APAGAR A ARTIE ---
 # --- RUTA PARA ENCENDER/APAGAR A ARTIE Y REINICIAR EMBÚDO ---
 @app.post("/api/toggle_bot/{telefono}")
 def toggle_bot(telefono: str, db: Session = Depends(get_db)):
@@ -306,7 +305,7 @@ def toggle_bot(telefono: str, db: Session = Depends(get_db)):
     # asumimos que el pedido anterior ya se entregó y preparamos al bot para un NUEVO PEDIDO.
     if cliente.bot_activo:
         cliente.paso_embudo = "inicio"
-        cliente.cantidad = None # <-- ESTA ES LA CLAVE: Borramos las "500 gorras" de la base de datos
+        cliente.cantidad = None # <-- ESTA ES LA CLAVE: Borramos la base de datos temporal
         
     db.commit()
     
@@ -541,7 +540,8 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     
                 # --- EMBUDO DE VENTAS UNIFICADO ---
                 if cliente.paso_embudo == "inicio":
-                    respuesta = "¡Hola! 👋 Bienvenido a La Sanjuanerita. Soy Artie, tu asistente virtual.\n\n¿Listo para destacar tu marca?\n1️⃣ Iniciar mi Pedido\n2️⃣ Ver Precios y Ofertas\n\n*(Responde con el número)*"
+                    # 🔥 Corrección de marca aquí
+                    respuesta = "¡Hola! 👋 Bienvenido a Gorra Print. Soy Artie, tu asistente virtual.\n\n¿Listo para destacar tu marca?\n1️⃣ Iniciar mi Pedido\n2️⃣ Ver Precios y Ofertas\n\n*(Responde con el número)*"
                     await responder_bot(respuesta)
                     cliente.paso_embudo = "esperando_opcion"
                     db.commit()
@@ -661,7 +661,8 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     respuesta += "📦 *Estado:* Orden registrada y enviada a mesa de diseño.\n"
                     respuesta += "💳 *Método de Pago:* Contra-entrega.\n\n"
                     respuesta += "⏳ *Siguiente paso:* En breve te enviaremos el **\"Pre-diseño Digital\"** a este chat para tu aprobación.\n\n"
-                    respuesta += "¡Gracias por confiar en *La Sanjuanerita*! 🧢"
+                    # 🔥 Corrección de marca aquí
+                    respuesta += "¡Gracias por confiar en *Gorra Print*! 🧢"
                     await responder_bot(respuesta)
                     
         except Exception as e:
