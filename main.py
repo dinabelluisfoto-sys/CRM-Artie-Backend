@@ -611,10 +611,17 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     cliente.bot_activo = False
                     cliente.paso_embudo = "completado"
                     
-                    pedido_actual = db.query(models.Pedido).filter(models.Pedido.cliente_id == cliente.id).order_by(models.Pedido.id.desc()).first()
+                    # 🔥 LA CORRECCIÓN: Buscamos explícitamente el pedido que se está cotizando ("EN PROCESO")
+                    pedido_actual = db.query(models.Pedido).filter(
+                        models.Pedido.cliente_id == cliente.id,
+                        models.Pedido.estatus == "EN PROCESO"
+                    ).first()
+                    
                     if pedido_actual:
                         pedido_actual.estatus = "NUEVO"
                         
+                    db.commit()
+                    
                     # 🔥 EL RECIBO DIGITAL PARA EL CLIENTE
                     respuesta = f"🎉 **¡Tu pedido está en marcha, {cliente.nombre}!**\n\n"
                     respuesta += "Aquí tienes el resumen oficial de tu orden para que todo quede súper claro:\n\n"
