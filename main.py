@@ -5,7 +5,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks, U
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 import re 
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -53,6 +53,9 @@ class MensajeEnvio(BaseModel):
 class ActualizarNombre(BaseModel):
     nombre: str
 
+class ContactoSchema(BaseModel):
+    nombre: str
+    telefono: str
 
 # --- MOTOR DE CÁLCULO DE LA SANJUANERITA ---
 def procesar_pedido_gorras(texto_usuario: str):
@@ -112,6 +115,56 @@ def guardar_nombre_manual(cliente_id: int, datos: ActualizarNombre, db: Session 
 @app.get("/")
 def ruta_raiz():
     return {"mensaje": "Motor CRM Artie activo y monitoreando."}
+
+@app.post("/api/contactos/guardar")
+def guardar_contacto_agenda(datos: ContactoSchema, id: Optional[str] = None, db: Session = Depends(get_db)):
+    # Limpiamos espacios y el signo '+' para que coincida exactamente con el formato de WhatsApp de Meta
+    telefono_db = datos.telefono.replace(" ", "").replace("+", "")
+    
+    # 1. MODO EDICIÓN (Si el frontend envía un ID válido)
+    if id and id.replace("nuevo_", "").isdigit(): 
+        cliente = db.query(models.Cliente).filter(models.Cliente.id == int(id)).first()
+        if cliente:
+            cliente.nombre = datos.nombre
+            cliente.telefono = telefono_db
+            db.commit()
+            return {"status": "ok", "message": "Contacto actualizado correctamente"}
+            
+    # 2. MODO CREACIÓN
+    # Primero verificamos si el cliente ya existe en la base de datos para no duplicarlo
+    cliente_existente = db.query(models.Cliente).filter(models.Cliente.telefono == telefono_db).first()
+    
+    if cliente_existente:
+        # Si existía pero estaba "eliminado", lo revivimos y le actualizamos el nombre
+        cliente_existente.nombre = datos.nombre
+        cliente_existente.esta_eliminado = False
+        db.commit()
+        return {"status": "ok", "message": "Contacto recuperado y actualizado"}
+    else:
+        # Si es totalmente nuevo, lo creamos desde cero. 
+        # bot_activo=False porque es un registro manual, Artie no debe hablarle de la nada.
+        nuevo_cliente = models.Cliente(
+            nombre=datos.nombre,
+            telefono=telefono_db,
+            nit="CF",
+            bot_activo=False, 
+            paso_embudo="inicio",
+            esta_fijado=False,
+            esta_eliminado=False
+        )
+        db.add(nuevo_cliente)
+        db.commit()
+        return {"status": "ok", "message": "Contacto nuevo creado"}
+
+@app.delete("/api/contactos/eliminar/{cliente_id}")
+def eliminar_contacto_agenda(cliente_id: int, db: Session = Depends(get_db)):
+    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+    if cliente:
+        # Eliminación suave para no romper el historial de chats y pedidos
+        cliente.esta_eliminado = True
+        db.commit()
+        return {"status": "ok"}
+    raise HTTPException(status_code=404, detail="Cliente no encontrado")
 
 @app.post("/clientes/", response_model=schemas.ClienteResponse)
 def crear_cliente(cliente: schemas.ClienteCreate, db: Session = Depends(get_db)):
