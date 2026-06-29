@@ -21,9 +21,9 @@ app = FastAPI(title="API CRM Artie", description="Motor de gestión de pedidos c
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permite que tu index.html local lea los datos de Railway
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Permite GET, POST, etc.
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -75,12 +75,10 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: str):
-        # El [:] crea una copia instantánea para que no rompa si una pestaña se cierra durante el bucle
         for connection in self.active_connections[:]:
             try:
                 await connection.send_text(message)
             except Exception:
-                # Si la conexión falló o está muerta, la removemos limpiamente
                 if connection in self.active_connections:
                     self.active_connections.remove(connection)
 
@@ -91,12 +89,11 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Mantiene el túnel abierto escuchando
             data = await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)    
 
-# --- MOTOR DE CÁLCULO GORRA PRINT ---
+# --- MOTOR DE CÁLCULO GORRA PRINT (NUEVOS PRECIOS) ---
 def procesar_pedido_gorras(texto_usuario: str):
     texto = texto_usuario.lower()
     cantidad = 0
@@ -115,22 +112,26 @@ def procesar_pedido_gorras(texto_usuario: str):
         
     envio = 47.00
     
+    # NUEVO ALGORITMO DE PRECIOS EXACTOS
     if cantidad < 12:
         precio_unitario = 25.00
         subtotal = cantidad * precio_unitario
     elif cantidad == 12:
         precio_unitario = 23.33
         subtotal = 280.00
-    elif 13 <= cantidad < 24:
-        precio_unitario = 23.33
+    elif 13 <= cantidad <= 23:
+        precio_unitario = 23.50
         subtotal = cantidad * precio_unitario
-    elif 24 <= cantidad < 300:
-        precio_unitario = 17.99
+    elif 24 <= cantidad <= 99:
+        precio_unitario = 18.00
         subtotal = cantidad * precio_unitario
-    elif 300 <= cantidad < 500:
+    elif 100 <= cantidad <= 199:
+        precio_unitario = 17.00
+        subtotal = cantidad * precio_unitario
+    elif 200 <= cantidad <= 499:
         precio_unitario = 16.00
         subtotal = cantidad * precio_unitario
-    else: 
+    else: # 500 o más
         precio_unitario = 15.00
         subtotal = cantidad * precio_unitario
         
@@ -157,20 +158,14 @@ def ruta_raiz():
 
 @app.post("/api/login")
 def login_sistema(credenciales: LoginRequest):
-    # Verificación de credenciales únicas y estrictas
     if credenciales.username == "dinabelluisfoto@gmail.com" and credenciales.password == "admin1234":
-        # Retornamos un token de acceso para que el frontend levante la cortina
         return {"access_token": "token_maestro_alsys_gorraprint"}
-    
-    # Si falla, lanzamos un error 401 (No autorizado)
     raise HTTPException(status_code=401, detail="Credenciales incorrectas")
 
 @app.post("/api/contactos/guardar")
 def guardar_contacto_agenda(datos: ContactoSchema, id: Optional[str] = None, db: Session = Depends(get_db)):
-    # Limpiamos espacios y el signo '+' para que coincida exactamente con el formato de WhatsApp de Meta
     telefono_db = datos.telefono.replace(" ", "").replace("+", "")
     
-    # 1. MODO EDICIÓN (Si el frontend envía un ID válido)
     if id and id.replace("nuevo_", "").isdigit(): 
         cliente = db.query(models.Cliente).filter(models.Cliente.id == int(id)).first()
         if cliente:
@@ -179,19 +174,14 @@ def guardar_contacto_agenda(datos: ContactoSchema, id: Optional[str] = None, db:
             db.commit()
             return {"status": "ok", "message": "Contacto actualizado correctamente"}
             
-    # 2. MODO CREACIÓN
-    # Primero verificamos si el cliente ya existe en la base de datos para no duplicarlo
     cliente_existente = db.query(models.Cliente).filter(models.Cliente.telefono == telefono_db).first()
     
     if cliente_existente:
-        # Si existía pero estaba "eliminado", lo revivimos y le actualizamos el nombre
         cliente_existente.nombre = datos.nombre
         cliente_existente.esta_eliminado = False
         db.commit()
         return {"status": "ok", "message": "Contacto recuperado y actualizado"}
     else:
-        # Si es totalmente nuevo, lo creamos desde cero. 
-        # bot_activo=False porque es un registro manual, Artie no debe hablarle de la nada.
         nuevo_cliente = models.Cliente(
             nombre=datos.nombre,
             telefono=telefono_db,
@@ -209,7 +199,6 @@ def guardar_contacto_agenda(datos: ContactoSchema, id: Optional[str] = None, db:
 def eliminar_contacto_agenda(cliente_id: int, db: Session = Depends(get_db)):
     cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
     if cliente:
-        # Eliminación suave para no romper el historial de chats y pedidos
         cliente.esta_eliminado = True
         db.commit()
         return {"status": "ok"}
@@ -276,7 +265,6 @@ def obtener_dashboard_chats(db: Session = Depends(get_db)):
         
         resultado_chats.append({
             "cliente_id": c.id,
-            # Si tiene nombre real úsalo, de lo contrario muestra el número limpio
             "cliente_nombre": c.nombre if c.nombre and c.nombre.lower() != "pendiente" else f"+{c.telefono}", 
             "telefono": c.telefono,
             "bot_activo": c.bot_activo,
@@ -291,28 +279,23 @@ def obtener_dashboard_chats(db: Session = Depends(get_db)):
     resultado_chats.sort(key=lambda x: (x["esta_fijado"], x["orden_id"]), reverse=True)
     return resultado_chats
 
-# --- RUTA PARA ENCENDER/APAGAR A ARTIE Y REINICIAR EMBÚDO ---
 @app.post("/api/toggle_bot/{telefono}")
 def toggle_bot(telefono: str, db: Session = Depends(get_db)):
     cliente = db.query(models.Cliente).filter(models.Cliente.telefono == telefono).first()
     if not cliente:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
     
-    # Invertimos el estado (Si estaba apagado, se enciende)
     cliente.bot_activo = not cliente.bot_activo
     
-    # 🔥 LA MAGIA DEL RESET: Si el dueño vuelve a ENCENDER a Artie, 
-    # asumimos que el pedido anterior ya se entregó y preparamos al bot para un NUEVO PEDIDO.
     if cliente.bot_activo:
         cliente.paso_embudo = "inicio"
-        cliente.cantidad = None # <-- ESTA ES LA CLAVE: Borramos la base de datos temporal
+        cliente.cantidad = None 
         
     db.commit()
     
     estado_nuevo = "ON (Memoria reiniciada)" if cliente.bot_activo else "OFF"
     return {"mensaje": f"Artie ahora está {estado_nuevo} para el número {telefono}"}
 
-# --- RUTA PARA LEER EL HISTORIAL DEL CHAT EN EL FRONTEND ---
 @app.get("/api/mensajes/{telefono}")
 def obtener_mensajes_chat(telefono: str, db: Session = Depends(get_db)):
     cliente = db.query(models.Cliente).filter(models.Cliente.telefono == telefono).first()
@@ -332,8 +315,6 @@ def obtener_mensajes_chat(telefono: str, db: Session = Depends(get_db)):
         })
     return resultados
 
-
-# --- RUTAS DE ACCIONES DEL MENÚ (3 PUNTITOS) ---
 @app.post("/api/chat/{cliente_id}/fijar")
 def toggle_fijar_chat(cliente_id: int, db: Session = Depends(get_db)):
     cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
@@ -350,8 +331,6 @@ def ocultar_chat(cliente_id: int, db: Session = Depends(get_db)):
         db.commit()
     return {"status": "ok"}
 
-
-# --- RUTAS DE ENVÍO HUMANO DE MENSAJES Y MEDIOS ---
 @app.post("/api/enviar_mensaje/{cliente_id}")
 async def enviar_mensaje_manual(cliente_id: int, mensaje: MensajeEnvio, db: Session = Depends(get_db)):
     cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
@@ -390,17 +369,12 @@ async def enviar_imagen_manual(cliente_id: int, file: UploadFile = File(...), db
     
     return {"status": "ok", "url": url_publica_imagen}
 
-# --- MOTOR PARA DESCARGAR IMÁGENES DESDE META ---
 async def descargar_media_whatsapp(media_id: str) -> str:
     token = os.getenv("WHATSAPP_TOKEN")
-    
-    headers = {
-        "Authorization": f"Bearer {token}"
-    }
+    headers = {"Authorization": f"Bearer {token}"}
     
     async with httpx.AsyncClient() as client:
         try:
-            # 1. Le pedimos a Meta la URL de descarga secreta de ese Media ID
             url_meta = f"https://graph.facebook.com/v17.0/{media_id}"
             response = await client.get(url_meta, headers=headers)
             
@@ -408,16 +382,13 @@ async def descargar_media_whatsapp(media_id: str) -> str:
                 datos_media = response.json()
                 url_descarga = datos_media.get("url")
                 
-                # 2. Con la URL secreta, descargamos la imagen real (los bytes)
                 archivo_response = await client.get(url_descarga, headers=headers)
                 
                 if archivo_response.status_code == 200:
-                    # Guardamos la imagen con su ID como nombre en tu carpeta de Railway
                     nombre_archivo = f"static/uploads/client_logo_{media_id}.jpg"
                     with open(nombre_archivo, "wb") as f:
                         f.write(archivo_response.content)
                     
-                    # Retornamos el link público definitivo para tu CRM
                     return f"https://crm-artie-backend-production.up.railway.app/{nombre_archivo}"
             
             print(f"Error al obtener URL de Meta para ID {media_id}: {response.text}", flush=True)
@@ -426,8 +397,6 @@ async def descargar_media_whatsapp(media_id: str) -> str:
             print(f"Excepción al descargar media de WhatsApp: {e}", flush=True)
             return None
 
-
-# --- RUTA WEBHOOK (Para WhatsApp) ---
 @app.get("/webhook")
 async def verificar_webhook(request: Request):
     token_servidor = os.getenv("VERIFY_TOKEN")
@@ -462,15 +431,10 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     texto_cliente = mensaje_info.get("text", {}).get("body", "").strip().lower()
                 elif tipo_mensaje == "image":
                     media_id = mensaje_info.get("image", {}).get("id")
-                    print(f"📷 Detectado Media ID de Meta: {media_id}. Iniciando descarga...", flush=True)
-                    
-                    # Llamamos al motor que acabamos de crear
                     url_descargada = await descargar_media_whatsapp(media_id)
                     
                     if url_descargada:
-                        # Reemplazamos el texto crudo por la URL real para que el historial lo pinte como foto
                         texto_cliente = url_descargada
-                        print(f"✅ Logo descargado y guardado en: {url_descargada}", flush=True)
                     else:
                         texto_cliente = f"[Error al descargar Logo ID: {media_id}]"
                 
@@ -503,11 +467,8 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                 db.add(msg_cliente)
                 db.commit()
 
-                # 🔥 ALSYS TIME: Avisamos al CRM al instante en que ingresa el mensaje,
-                # antes de que Artie empiece a pensar, escribir o descargar medios.
                 await manager.broadcast("nuevo_mensaje_recibido")
 
-                # --- MOTOR DE RESPUESTA INTERNO ---
                 async def responder_bot(texto_respuesta: str, imagen_url: str = None):
                     if imagen_url:
                         await enviar_imagen_whatsapp(numero_cliente, imagen_url)
@@ -521,12 +482,10 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     db.add(msg_bot)
                     db.commit()
 
-                # --- ESCUDO DE INTERVENCIÓN HUMANA ---
-                # Si el pedido ya se confirmó, bloqueamos al bot por completo
                 if cliente.paso_embudo == "completado":
                     cliente.bot_activo = False
                     db.commit()
-                    return # Cortamos la ejecución aquí. El bot se queda mudo.    
+                    return 
 
                 palabras_reinicio = ["hola", "menu", "menú", "cancelar", "reiniciar", "salir"]
                 if texto_cliente in palabras_reinicio:
@@ -535,27 +494,25 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     db.commit()
                     
                 if not cliente.bot_activo:
-                    print(f"🤫 Artie en silencio para el número +502 {numero_cliente}.", flush=True)
                     return 
                     
-                # --- EMBUDO DE VENTAS UNIFICADO ---
+                # --- EMBUDO DE NEURO-VENTAS GORRA PRINT ---
                 if cliente.paso_embudo == "inicio":
-                    # 🔥 Corrección de marca aquí
-                    respuesta = "¡Hola! 👋 Bienvenido a Gorra Print. Soy Artie, tu asistente virtual.\n\n¿Listo para destacar tu marca?\n1️⃣ Iniciar mi Pedido\n2️⃣ Ver Precios y Ofertas\n\n*(Responde con el número)*"
+                    respuesta = "¡Hola! 👋 Qué alegría saludarte. Soy Artie, el asistente virtual de Gorra Print.\n\nEstás en el lugar correcto para darle vida a tu marca. Para darte el mejor servicio, cuéntame:\n\n1️⃣ Iniciar mi Cotización / Pedido\n2️⃣ Ver Tabla de Precios y Ofertas\n\n*(Responde con el número)*"
                     await responder_bot(respuesta)
                     cliente.paso_embudo = "esperando_opcion"
                     db.commit()
                     
                 elif cliente.paso_embudo == "esperando_opcion":
                     if texto_cliente == "1" or texto_cliente == "2":
-                        respuesta = "¡Excelente decisión! ✨ Para que elijas la mejor opción, aquí tienes nuestra escala de precios:\n\n"
-                        respuesta += "📌 *Escala por volumen:*\n"
-                        respuesta += "📦 *1 Docena (12)*: Q.280 en total\n"
-                        respuesta += "📦 *24 a 299 gorras*: Q.17.99 c/u\n"
-                        respuesta += "📦 *300 a 499 gorras*: Q.16.00 c/u\n"
-                        respuesta += "📦 *500+ gorras*: Q.15.00 c/u\n\n"
-                        respuesta += "💡 **¿Cuántas gorras tienes en mente para tu pedido?**\n"
-                        respuesta += "*(Responde directamente con la cantidad, ej: 60, 100, 500...)*"
+                        respuesta = "¡Excelente decisión! ✨ Para darte el mejor precio, trabajamos con una escala de mayoreo espectacular:\n\n"
+                        respuesta += "📦 *1 Docena (12 gorras):* Q.280 en total\n"
+                        respuesta += "📦 *24 a 99 gorras:* Q.18.00 c/u\n"
+                        respuesta += "📦 *100 a 199 gorras:* Q.17.00 c/u\n"
+                        respuesta += "📦 *200 a 499 gorras:* Q.16.00 c/u\n"
+                        respuesta += "📦 *500 a 1000+ gorras:* Q.15.00 c/u\n\n"
+                        respuesta += "💡 **¿Cuántas gorras tienes en mente para este proyecto?**\n"
+                        respuesta += "*(Puedes escribirme solo el número, ej: 24, 50, 100...)*"
                         
                         link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
                         await responder_bot(respuesta, imagen_url=link_precios)
@@ -570,9 +527,24 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     calculo = procesar_pedido_gorras(texto_cliente)
                     if calculo:
                         cantidad, subtotal, envio, total = calculo
+                        
+                        # 🔥 TRAMPA INTELIGENTE DE UPSELL (19 a 23 gorras)
+                        # Usamos la memoria temporal para no ciclar al bot
+                        if 19 <= cantidad <= 23 and str(cliente.cantidad) != str(cantidad):
+                            cliente.cantidad = cantidad # Guardamos en memoria que ya le avisamos
+                            db.commit()
+                            
+                            respuesta = f"Noté que tienes en mente {cantidad} gorras. 💡 *Consejo corporativo:* Si ajustas tu pedido a **24 gorras**, se activa nuestro descuento de mayoreo (Q.18 c/u).\n\n"
+                            respuesta += f"¡Llevarás más unidades por una inversión casi idéntica!\n\n"
+                            respuesta += f"👉 *Escribe '24' para aprovechar la oferta, o vuelve a escribir '{cantidad}' para confirmar tu cantidad inicial.*"
+                            
+                            await responder_bot(respuesta)
+                            return # Pausamos el embudo aquí hasta que decida
+                            
                         str_subtotal = f"{subtotal:,.2f}"
                         str_total = f"{total:,.2f}"
                         
+                        # CORRECCIÓN DE BUG: 'cantidad' en lugar de 'quantity'
                         pedido_existente = db.query(models.Pedido).filter(models.Pedido.cliente_id == cliente.id, models.Pedido.estatus == "EN PROCESO").first()
                         if pedido_existente:
                             pedido_existente.cantidad = cantidad
@@ -581,14 +553,16 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                             nuevo_pedido = models.Pedido(cliente_id=cliente.id, cantidad=cantidad, total_quetzales=total, estatus="EN PROCESO", link_logo="n/a")
                             db.add(nuevo_pedido)
                         
-                        respuesta = f"Entendido: **{cantidad} Gorras** 🧢\n"
-                        respuesta += f"💰 *Tu Inversión: Q. {str_total} (Subtotal: Q.{str_subtotal} + Q.47 envío)*\n\n"
-                        respuesta += "Ahora, dale personalidad. Mira el catálogo de arriba ☝️ y elige:\n\n"
-                        respuesta += "🤍 *Neutros:* Blanco, Negro, Gris Claro, Gris Oscuro.\n"
-                        respuesta += "💙 *Azules:* Marino, Rey, Celeste.\n"
-                        respuesta += "🌈 *Vivos:* Rosa, Amarillo Mango, Verde Oscuro, Morado.\n"
-                        respuesta += "🌸 *Pastel:* Rosa Millenial.\n\n"
-                        respuesta += "👉 **¿Cuál es tu color favorito?** *(Escríbelo aquí abajo)*"
+                        respuesta = f"¡Excelente inversión! 🤝\n\n"
+                        respuesta += f"🧢 *Cantidad:* {cantidad} Gorras Trucker\n"
+                        respuesta += f"💰 *Total a Pagar:* Q. {str_total} *(Incluye envío a todo el país y pago contra-entrega)*\n\n"
+                        respuesta += "Ya tenemos la base de tu pedido asegurada. 🎯\n"
+                        respuesta += "Ahora, elijamos el lienzo perfecto para destacar tu marca. 🎨 Abre la imagen de arriba y descubre nuestros 16 colores disponibles (Frente blanco listos para tu logo / Malla de color):\n\n"
+                        respuesta += "🎩 *Los Clásicos:* Negro, Gris Oscuro, Gris Claro, Blanco Total, Café.\n"
+                        respuesta += "🔵 *Fríos y Frescos:* Marino, Azul Rey, Celeste, Verde, Pistache.\n"
+                        respuesta += "🔥 *Cálidos y Vibrantes:* Rojo, Corinto, Mango.\n"
+                        respuesta += "✨ *Creativos y Únicos:* Morado, Rosa Millenial, Fucsia.\n\n"
+                        respuesta += "👉 **¿Qué color representa mejor a tu marca?**\n*(Escribe tu color favorito aquí abajo para continuar 👇)*"
                         
                         link_catalogo = "https://crm-artie-backend-production.up.railway.app/static/colores.jpg"
                         await responder_bot(respuesta, imagen_url=link_catalogo)
@@ -603,12 +577,15 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     cliente.paso_embudo = "pidiendo_logo"
                     db.commit()
                     color_elegido = texto_cliente.title()
-                    respuesta = f"¡El {color_elegido} es una gran elección! ✨\n\nAhora, la parte más importante: *Tu Marca.*\n👉 *Envía la FOTO de tu LOGO aquí.*\n\n*(Con esto haremos un \"Pre-diseño Digital\" para que apruebes cómo se ve antes de fabricar).*"
+                    respuesta = f"¡El {color_elegido} tiene muchísima presencia, se verá increíble! 🌟\n\n"
+                    respuesta += "Ya tenemos la cantidad y el color. Ahora necesitamos al protagonista: *Tu Marca.*\n"
+                    respuesta += "📸 Por favor, **envíame aquí mismo la imagen o foto de tu logo.**\n\n"
+                    respuesta += "*(Con tu imagen, nuestro equipo creará un \"Pre-diseño Digital\" totalmente GRATIS para que apruebes cómo se verán tus gorras antes de fabricarlas).*"
                     await responder_bot(respuesta)
                     
                 elif cliente.paso_embudo == "pidiendo_logo":
                     if tipo_mensaje == "image" or "[media_id" in texto_cliente:
-                        respuesta = "✅ **¡Logo Recibido!**\nYa está con nuestro equipo de diseño. 👨‍🎨\n\nPara formalizar tu orden: **¿A nombre de quién la registramos?** 👤"
+                        respuesta = "✅ **¡Logo recibido y asegurado!** 🔐\nYa lo mandé a nuestra mesa de diseño.\n\nPara ir preparando tu orden de envío: **¿A nombre de quién registramos este súper pedido?** 👤"
                         await responder_bot(respuesta)
                         cliente.paso_embudo = "pidiendo_nombre"
                         db.commit()
@@ -622,7 +599,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     if not cliente.nombre or cliente.nombre.lower() == "pendiente":
                         cliente.nombre = nombre_pedido
                         
-                    respuesta = f"Un gusto, {nombre_pedido}. 🤝\n📞 **¿A qué número de teléfono te podemos llamar para confirmar el diseño?**"
+                    respuesta = f"Un gusto saludarte, {nombre_pedido}. 🤝\n📞 **¿A qué número de teléfono te puede contactar nuestro equipo de mensajería para coordinar la entrega?**"
                     await responder_bot(respuesta)
                     cliente.paso_embudo = "pidiendo_telefono"
                     db.commit()
@@ -630,7 +607,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                 elif cliente.paso_embudo == "pidiendo_telefono":
                     numero_limpio = re.sub(r'\D', '', texto_cliente)
                     if len(numero_limpio) == 8:
-                        respuesta = "Anotado. 📝\nPor último: **¿Cuál es tu NIT para la factura?**\n*(Escribe CF si no tienes)*"
+                        respuesta = "Anotado. 📝\nY para tu comprobante, **¿Tienes algún número de NIT?** *(Si no tienes, solo escribe CF)*"
                         await responder_bot(respuesta)
                         cliente.paso_embudo = "pidiendo_nit"
                         db.commit()
@@ -641,7 +618,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                 elif cliente.paso_embudo == "pidiendo_nit":
                     cliente.nit = texto_cliente.upper()
                     
-                    respuesta = "¡Excelente! 📝\nPara asegurar que tu pedido llegue directo a tus manos y sin contratiempos, **¿cuál es la dirección exacta donde deseas recibir esta entrega especial?** 🚚📍\n*(Por favor, incluye referencias o municipio)*"
+                    respuesta = "¡Todo en orden! 📍\nPor último, para que tu pedido llegue directo a la puerta de tu casa o negocio, **¿Cuál es tu dirección exacta de entrega?**\n*(No olvides incluir tu municipio y departamento)*"
                     await responder_bot(respuesta)
                     
                     cliente.paso_embudo = "pidiendo_direccion"
@@ -657,19 +634,17 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         
                     db.commit()
                     
-                    respuesta = "🎉 **¡Pedido Confirmado Exitosamente!**\n\n"
-                    respuesta += "📦 *Estado:* Orden registrada y enviada a mesa de diseño.\n"
-                    respuesta += "💳 *Método de Pago:* Contra-entrega.\n\n"
-                    respuesta += "⏳ *Siguiente paso:* En breve te enviaremos el **\"Pre-diseño Digital\"** a este chat para tu aprobación.\n\n"
-                    # 🔥 Corrección de marca aquí
-                    respuesta += "¡Gracias por confiar en *Gorra Print*! 🧢"
+                    respuesta = f"🎉 **¡Tu pedido está en marcha, {cliente.nombre}!**\n\n"
+                    respuesta += "📦 *Estado actual:* Orden registrada y enviada a mesa de diseño.\n"
+                    respuesta += "💳 *Método de Pago:* Pago contra-entrega (Pagas al recibir).\n\n"
+                    respuesta += "⏳ *Siguiente paso:* Un asesor humano de Gorra Print te escribirá en este mismo chat enviándote tu *Pre-diseño Digital* para tu aprobación final.\n\n"
+                    respuesta += "¡Gracias por confiar en *Gorra Print*! Estamos emocionados de trabajar en tu marca. 🧢🔥"
                     await responder_bot(respuesta)
                     
         except Exception as e:
             print(f"Error unificando flujo en background: {e}", flush=True)
         finally:
             db.close()
-            # 🔥 Lanzamos un pulso de cierre para refrescar si Artie envió respuestas automáticas
             await manager.broadcast("nuevo_mensaje_recibido")
 
     background_tasks.add_task(procesar_flujo)
