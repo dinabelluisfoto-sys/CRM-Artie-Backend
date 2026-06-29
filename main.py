@@ -75,11 +75,14 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: str):
-        for connection in self.active_connections:
+        # El [:] crea una copia instantánea para que no rompa si una pestaña se cierra durante el bucle
+        for connection in self.active_connections[:]:
             try:
                 await connection.send_text(message)
-            except:
-                pass
+            except Exception:
+                # Si la conexión falló o está muerta, la removemos limpiamente
+                if connection in self.active_connections:
+                    self.active_connections.remove(connection)
 
 manager = ConnectionManager()
 
@@ -501,6 +504,10 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                 db.add(msg_cliente)
                 db.commit()
 
+                # 🔥 ALSYS TIME: Avisamos al CRM al instante en que ingresa el mensaje,
+                # antes de que Artie empiece a pensar, escribir o descargar medios.
+                await manager.broadcast("nuevo_mensaje_recibido")
+
                 # --- MOTOR DE RESPUESTA INTERNO ---
                 async def responder_bot(texto_respuesta: str, imagen_url: str = None):
                     if imagen_url:
@@ -568,7 +575,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         
                         pedido_existente = db.query(models.Pedido).filter(models.Pedido.cliente_id == cliente.id, models.Pedido.estatus == "EN PROCESO").first()
                         if pedido_existente:
-                            pedido_existente.cantidad = cantidad
+                            pedido_existente.cantidad = quantity
                             pedido_existente.total_quetzales = total
                         else:
                             nuevo_pedido = models.Pedido(cliente_id=cliente.id, cantidad=cantidad, total_quetzales=total, estatus="EN PROCESO", link_logo="n/a")
@@ -612,8 +619,6 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                 elif cliente.paso_embudo == "pidiendo_nombre":
                     nombre_pedido = texto_cliente.title()
                     
-                    # 🔥 ESCUDO DE IDENTIDAD: Solo guardamos el nombre si el contacto es "Pendiente" o no tiene nombre.
-                    # Si el dueño ya lo guardó manualmente en la agenda, respetamos el nombre del dueño.
                     if not cliente.nombre or cliente.nombre.lower() == "pendiente":
                         cliente.nombre = nombre_pedido
                         
@@ -636,7 +641,6 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                 elif cliente.paso_embudo == "pidiendo_nit":
                     cliente.nit = texto_cliente.upper()
                     
-                    # 🧠 Psicología de ventas: Sentido de pertenencia y seguridad
                     respuesta = "¡Excelente! 📝\nPara asegurar que tu pedido llegue directo a tus manos y sin contratiempos, **¿cuál es la dirección exacta donde deseas recibir esta entrega especial?** 🚚📍\n*(Por favor, incluye referencias o municipio)*"
                     await responder_bot(respuesta)
                     
@@ -644,7 +648,6 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     db.commit()
                     
                 elif cliente.paso_embudo == "pidiendo_direccion":
-                    # El cliente ya dio su dirección (queda guardada en el historial del chat)
                     cliente.bot_activo = False
                     cliente.paso_embudo = "completado"
                     
@@ -665,8 +668,9 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
             print(f"Error unificando flujo en background: {e}", flush=True)
         finally:
             db.close()
-            # 🔥 Lanzamos el pulso a todas las pantallas conectadas
+            # 🔥 Lanzamos un pulso de cierre para refrescar si Artie envió respuestas automáticas
             await manager.broadcast("nuevo_mensaje_recibido")
+
     background_tasks.add_task(procesar_flujo)
     return {"status": "ok"}
 
