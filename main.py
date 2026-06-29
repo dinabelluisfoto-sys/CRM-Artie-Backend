@@ -575,7 +575,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         
                         pedido_existente = db.query(models.Pedido).filter(models.Pedido.cliente_id == cliente.id, models.Pedido.estatus == "EN PROCESO").first()
                         if pedido_existente:
-                            pedido_existente.cantidad = quantity
+                            pedido_existente.cantidad = cantidad
                             pedido_existente.total_quetzales = total
                         else:
                             nuevo_pedido = models.Pedido(cliente_id=cliente.id, cantidad=cantidad, total_quetzales=total, estatus="EN PROCESO", link_logo="n/a")
