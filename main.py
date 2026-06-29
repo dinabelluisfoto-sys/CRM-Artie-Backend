@@ -57,6 +57,10 @@ class ContactoSchema(BaseModel):
     nombre: str
     telefono: str
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str    
+
 # --- MOTOR DE CÁLCULO DE LA SANJUANERITA ---
 def procesar_pedido_gorras(texto_usuario: str):
     texto = texto_usuario.lower()
@@ -115,6 +119,16 @@ def guardar_nombre_manual(cliente_id: int, datos: ActualizarNombre, db: Session 
 @app.get("/")
 def ruta_raiz():
     return {"mensaje": "Motor CRM Artie activo y monitoreando."}
+
+@app.post("/api/login")
+def login_sistema(credenciales: LoginRequest):
+    # Verificación de credenciales únicas y estrictas
+    if credenciales.username == "dinabelluisfoto@gmail.com" and credenciales.password == "admin1234":
+        # Retornamos un token de acceso para que el frontend levante la cortina
+        return {"access_token": "token_maestro_alsys_gorraprint"}
+    
+    # Si falla, lanzamos un error 401 (No autorizado)
+    raise HTTPException(status_code=401, detail="Credenciales incorrectas")
 
 @app.post("/api/contactos/guardar")
 def guardar_contacto_agenda(datos: ContactoSchema, id: Optional[str] = None, db: Session = Depends(get_db)):
