@@ -112,7 +112,6 @@ def procesar_pedido_gorras(texto_usuario: str):
         
     envio = 47.00
     
-    # NUEVO ALGORITMO DE PRECIOS EXACTOS
     if cantidad < 12:
         precio_unitario = 25.00
         subtotal = cantidad * precio_unitario
@@ -131,7 +130,7 @@ def procesar_pedido_gorras(texto_usuario: str):
     elif 200 <= cantidad <= 499:
         precio_unitario = 16.00
         subtotal = cantidad * precio_unitario
-    else: # 500 o más
+    else: 
         precio_unitario = 15.00
         subtotal = cantidad * precio_unitario
         
@@ -142,7 +141,6 @@ def procesar_pedido_gorras(texto_usuario: str):
 
 
 # --- RUTAS DE CRM (Clientes y Pedidos) ---
-
 @app.put("/api/cliente/{cliente_id}/nombre")
 def guardar_nombre_manual(cliente_id: int, datos: ActualizarNombre, db: Session = Depends(get_db)):
     cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
@@ -289,7 +287,6 @@ def toggle_bot(telefono: str, db: Session = Depends(get_db)):
     
     if cliente.bot_activo:
         cliente.paso_embudo = "inicio"
-        cliente.cantidad = None 
         
     db.commit()
     
@@ -455,7 +452,14 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     db.refresh(cliente)
                 else:
                     if cliente.esta_eliminado:
+                        # 🧹 BORRÓN Y CUENTA NUEVA: El cliente regresa, borramos el pasado
                         cliente.esta_eliminado = False
+                        cliente.nombre = "Pendiente"
+                        cliente.bot_activo = True
+                        cliente.paso_embudo = "inicio"
+                        
+                        # Limpiamos el historial viejo
+                        db.query(models.Mensaje).filter(models.Mensaje.cliente_id == cliente.id).delete()
                         db.commit()
 
                 msg_cliente = models.Mensaje(
@@ -523,28 +527,27 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         respuesta = "Por favor, responde únicamente con el número 1 o 2 para continuar."
                         await responder_bot(respuesta)
                         
-                elif cliente.paso_embudo == "pidiendo_cantidad":
+                # 🔥 COMBINACIÓN MAGISTRAL: "pidiendo_cantidad" y "confirmando_upsell"
+                elif cliente.paso_embudo == "pidiendo_cantidad" or cliente.paso_embudo == "confirmando_upsell":
                     calculo = procesar_pedido_gorras(texto_cliente)
                     if calculo:
                         cantidad, subtotal, envio, total = calculo
                         
-                        # 🔥 TRAMPA INTELIGENTE DE UPSELL (19 a 23 gorras)
-                        # Usamos la memoria temporal para no ciclar al bot
-                        if 19 <= cantidad <= 23 and str(cliente.cantidad) != str(cantidad):
-                            cliente.cantidad = cantidad # Guardamos en memoria que ya le avisamos
-                            db.commit()
-                            
+                        # 💡 LÓGICA DE UPSELL (Solo si viene por primera vez, no si ya está confirmando)
+                        if cliente.paso_embudo == "pidiendo_cantidad" and 19 <= cantidad <= 23:
                             respuesta = f"Noté que tienes en mente {cantidad} gorras. 💡 *Consejo corporativo:* Si ajustas tu pedido a **24 gorras**, se activa nuestro descuento de mayoreo (Q.18 c/u).\n\n"
-                            respuesta += f"¡Llevarás más unidades por una inversión casi idéntica!\n\n"
+                            respuesta += "¡Llevarás más unidades por una inversión casi idéntica!\n\n"
                             respuesta += f"👉 *Escribe '24' para aprovechar la oferta, o vuelve a escribir '{cantidad}' para confirmar tu cantidad inicial.*"
                             
                             await responder_bot(respuesta)
-                            return # Pausamos el embudo aquí hasta que decida
+                            cliente.paso_embudo = "confirmando_upsell"
+                            db.commit()
+                            return # Pausamos el embudo hasta que decida
                             
+                        # Flujo Normal o Upsell Aceptado
                         str_subtotal = f"{subtotal:,.2f}"
                         str_total = f"{total:,.2f}"
                         
-                        # CORRECCIÓN DE BUG: 'cantidad' en lugar de 'quantity'
                         pedido_existente = db.query(models.Pedido).filter(models.Pedido.cliente_id == cliente.id, models.Pedido.estatus == "EN PROCESO").first()
                         if pedido_existente:
                             pedido_existente.cantidad = cantidad
@@ -555,7 +558,8 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                         
                         respuesta = f"¡Excelente inversión! 🤝\n\n"
                         respuesta += f"🧢 *Cantidad:* {cantidad} Gorras Trucker\n"
-                        respuesta += f"💰 *Total a Pagar:* Q. {str_total} *(Incluye envío a todo el país y pago contra-entrega)*\n\n"
+                        # 🔥 Corrección de Transparencia en Subtotal y Envío
+                        respuesta += f"💰 *Total a Pagar:* Q. {str_total} *(Subtotal: Q.{str_subtotal} + Q.47.00 de envío a todo el país y pago contra-entrega)*\n\n"
                         respuesta += "Ya tenemos la base de tu pedido asegurada. 🎯\n"
                         respuesta += "Ahora, elijamos el lienzo perfecto para destacar tu marca. 🎨 Abre la imagen de arriba y descubre nuestros 16 colores disponibles (Frente blanco listos para tu logo / Malla de color):\n\n"
                         respuesta += "🎩 *Los Clásicos:* Negro, Gris Oscuro, Gris Claro, Blanco Total, Café.\n"
@@ -596,8 +600,8 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                 elif cliente.paso_embudo == "pidiendo_nombre":
                     nombre_pedido = texto_cliente.title()
                     
-                    if not cliente.nombre or cliente.nombre.lower() == "pendiente":
-                        cliente.nombre = nombre_pedido
+                    # 🔥 Prioridad de nombre: El cliente manda y sobrescribe SIEMPRE su nombre
+                    cliente.nombre = nombre_pedido
                         
                     respuesta = f"Un gusto saludarte, {nombre_pedido}. 🤝\n📞 **¿A qué número de teléfono te puede contactar nuestro equipo de mensajería para coordinar la entrega?**"
                     await responder_bot(respuesta)
