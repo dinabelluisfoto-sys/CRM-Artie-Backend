@@ -505,7 +505,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
 
                     # 2. Configurar motor
                     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-                    model = genai.GenerativeModel('gemini-1.0-pro')
+                    model = genai.GenerativeModel('gemini-3-flash-preview')
 
                     # 3. ADN del Vendedor (Prompt Estricto)
                     prompt = f"""
@@ -527,14 +527,14 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     REGLAS ESTRICTAS DE ALSYS:
                     1. NUNCA inventes precios. Calcula los totales multiplicando la cantidad por el precio unitario y súmale los Q.47 de envío.
                     2. Responde SIEMPRE de forma conversacional, sin menús numéricos (olvida el presiona 1 o 2). Si el cliente dice "quiero 50 gorras rojas", tú respondes calculando el total y pidiendo el siguiente dato.
-                    3. Proceso para cerrar venta: Debes recolectar Cantidad, Color, pedir que te envíen la foto del Logo, pedir Nombre, Teléfono, NIT y Dirección de envío. Pídelos uno por uno conversando, no todos de golpe.
+                    3. Proceso para cerrar venta: Debes recolectar Cantidad, Color, pedir que te envíen la foto del Logo, pedir Nombre, Teléfono (OBLIGATORIO que sean exactamente 8 dígitos, si el cliente envía más o menos dígitos, dile amablemente que en Guatemala el número debe ser de 8 dígitos y vuelve a pedirlo), NIT y Dirección de envío. Pídelos uno por uno conversando, no todos de golpe.
                     4. Si el historial dice "Imagen/Logo adjunto", agradécele por el logo y continúa con la venta.
                     
                     CONTROL DE IMÁGENES ALSYS (OBLIGATORIO):
                     - Si el cliente te pide precios, o le quieres mostrar la escala de mayoreo, DEBES escribir al final exacto de tu mensaje la etiqueta: [ENVIAR_PRECIOS]
                     - Si el cliente te pide ver colores, o le invitas a elegir un color, DEBES escribir al final exacto de tu mensaje la etiqueta: [ENVIAR_COLORES]
                     
-                    5. GATILLO SECRETO: Cuando el cliente ya te haya dado TODOS los datos finales para su pedido (Cantidad, Color, Logo, Nombre, Teléfono, NIT y Dirección), dale un resumen final amable y despídete. Al FINAL EXACTO de tu mensaje pon esta estructura estricta separada por el símbolo | :
+                    5. GATILLO SECRETO: Cuando el cliente ya te haya dado TODOS los datos finales para su pedido (Cantidad, Color, Logo, Nombre, Teléfono, NIT y Dirección), dale un resumen final de su compra, infórmale expresamente que "en un breve momento un asesor humano le enviará su pre-diseño digital para su aprobación" y despídete amablemente. Al FINAL EXACTO de tu mensaje pon esta estructura estricta separada por el símbolo | :
                     [ORDEN_COMPLETA]|cantidad_en_numeros|total_a_pagar_en_numeros|NIT_del_cliente|direccion_del_cliente
                     Ejemplo exacto: [ORDEN_COMPLETA]|100|1747.00|CF|Quetzaltenango
 
