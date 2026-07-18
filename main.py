@@ -730,3 +730,5 @@ async def enviar_imagen_whatsapp(numero_destino: str, link_imagen: str, caption:
                 print("Meta rechazó la imagen pero el flujo continúa:", response.text, flush=True)
     except Exception as img_err:
         print(f"Fallo de conexión al enviar imagen: {img_err}", flush=True)
+
+        
