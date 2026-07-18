@@ -543,9 +543,9 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     Escribe la respuesta de Artie para el cliente basándote en el último mensaje del historial:
                     """
 
-                    # 2. Conexión Directa REST API (Bypass completo de la librería vieja)
+                    # 2. Conexión Directa REST API (Actualizada a v1 y gemini-2.5-flash)
                     gemini_api_key = os.getenv("GEMINI_API_KEY")
-                    gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_api_key}"
+                    gemini_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={gemini_api_key}"
                     
                     payload_ia = {
                         "contents": [{"parts": [{"text": prompt}]}],
@@ -563,7 +563,9 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                             data_ia = res_ia.json()
                             respuesta_ia = data_ia["candidates"][0]["content"]["parts"][0]["text"].strip()
                         else:
-                            raise Exception(f"API Gemini REST falló: {res_ia.text}")
+                            print(f"Status Gemini: {res_ia.status_code}", flush=True)
+                            print(f"Respuesta Gemini: {res_ia.text}", flush=True)
+                            raise Exception(f"API Gemini REST falló con status {res_ia.status_code}")
 
                     # Limpieza por si la IA agrega su nombre al inicio
                     if respuesta_ia.startswith("Artie:"):
