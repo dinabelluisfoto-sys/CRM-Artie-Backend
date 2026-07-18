@@ -13,7 +13,6 @@ from pydantic import BaseModel
 from database import engine, get_db
 import models, schemas
 import shutil
-import google.generativeai as genai
 
 os.makedirs("static/uploads", exist_ok=True)
 
@@ -488,7 +487,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     return 
                     
                 # ==========================================================
-                # CEREBRO GEMINI IA ALSYS 
+                # CEREBRO GEMINI IA ALSYS (NUEVA CONEXIÓN REST API PURA)
                 # ==========================================================
                 try:
                     # 1. Recuperar contexto histórico
@@ -500,7 +499,6 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     contexto = ""
                     for msg in historial_db:
                         rol = "Cliente" if msg.remitente == "cliente" else "Artie"
-                        # FIX DE LOGO: Diferenciar entre imagenes del cliente y catalogos del bot
                         if "http" in msg.contenido and msg.remitente == "cliente":
                             texto = "[Imagen/Logo adjunto por el cliente]"
                         elif "http" in msg.contenido and msg.remitente == "bot":
@@ -509,11 +507,6 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                             texto = msg.contenido
                         contexto += f"{rol}: {texto}\n"
 
-                    # 2. Configurar motor - Alias universal para librería legacy
-                    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-                    model = genai.GenerativeModel('gemini-pro')
-
-                    # 3. ADN del Vendedor (Prompt Estricto)
                     prompt = f"""
                     Eres Artie, el vendedor estrella de Gorra Print (Guatemala). Eres amable, humano, súper rápido para responder y usas emojis.
                     Tu objetivo es cerrar ventas de gorras trucker personalizadas.
@@ -550,17 +543,27 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     Escribe la respuesta de Artie para el cliente basándote en el último mensaje del historial:
                     """
 
-                    # Apagando los filtros de seguridad para poder procesar nombres y teléfonos sin que Google bloquee la respuesta
-                    response = model.generate_content(
-                        prompt,
-                        safety_settings=[
+                    # 2. Conexión Directa REST API (Bypass completo de la librería vieja)
+                    gemini_api_key = os.getenv("GEMINI_API_KEY")
+                    gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_api_key}"
+                    
+                    payload_ia = {
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "safetySettings": [
                             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
                             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
                             {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
                             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
                         ]
-                    )
-                    respuesta_ia = response.text.strip()
+                    }
+                    
+                    async with httpx.AsyncClient() as client_ia:
+                        res_ia = await client_ia.post(gemini_url, json=payload_ia, timeout=30.0)
+                        if res_ia.status_code == 200:
+                            data_ia = res_ia.json()
+                            respuesta_ia = data_ia["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        else:
+                            raise Exception(f"API Gemini REST falló: {res_ia.text}")
 
                     # Limpieza por si la IA agrega su nombre al inicio
                     if respuesta_ia.startswith("Artie:"):
