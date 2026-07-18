@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from database import engine, get_db
 import models, schemas
 import shutil
+import google.generativeai as genai # <-- IMPORTACIÓN DE LA IA ALSYS
 
 os.makedirs("static/uploads", exist_ok=True)
 
@@ -279,7 +280,7 @@ def toggle_bot(telefono: str, db: Session = Depends(get_db)):
         
     db.commit()
     
-    estado_nuevo = "ON (Memoria reiniciada)" if cliente.bot_activo else "OFF"
+    estado_nuevo = "ON (Memoria IA reiniciada)" if cliente.bot_activo else "OFF"
     return {"mensaje": f"Artie ahora está {estado_nuevo} para el número {telefono}"}
 
 @app.get("/api/mensajes/{telefono}")
@@ -486,185 +487,95 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                 if not cliente.bot_activo:
                     return 
                     
-                if cliente.paso_embudo == "inicio":
-                    respuesta = "¡Hola! 👋 Qué alegría saludarte. Soy Artie, el asistente virtual de Gorra Print.\n\nEstás en el lugar correcto para darle vida a tu marca. Para darte el mejor servicio, cuéntame:\n\n1️⃣ Iniciar mi Cotización / Pedido\n2️⃣ Ver Tabla de Precios y Ofertas\n\n*(Responde con el número)*"
-                    await responder_bot(respuesta)
-                    cliente.paso_embudo = "esperando_opcion"
-                    db.commit()
-                    
-                elif cliente.paso_embudo == "esperando_opcion":
-                    if texto_cliente == "1" or texto_cliente == "2":
-                        respuesta = "¡Excelente decisión! ✨ Para darte el mejor precio, trabajamos con una escala de mayoreo espectacular:\n\n"
-                        respuesta += "📦 *1 Docena (12 gorras):* Q.280 en total\n"
-                        respuesta += "📦 *24 a 99 gorras:* Q.18.00 c/u\n"
-                        respuesta += "📦 *100 a 199 gorras:* Q.17.00 c/u\n"
-                        respuesta += "📦 *200 a 499 gorras:* Q.16.00 c/u\n"
-                        respuesta += "📦 *500 a 1000+ gorras:* Q.15.00 c/u\n\n"
-                        respuesta += "💡 **¿Cuántas gorras tienes en mente para este proyecto?**\n"
-                        respuesta += "*(Puedes escribirme solo el número, ej: 24, 50, 100...)*"
-                        
-                        link_precios = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
-                        await responder_bot(respuesta, imagen_url=link_precios)
-                        
-                        cliente.paso_embudo = "pidiendo_cantidad"
-                        db.commit()
-                    else:
-                        respuesta = "Por favor, responde únicamente con el número 1 o 2 para continuar."
-                        await responder_bot(respuesta)
-                        
-                elif cliente.paso_embudo == "pidiendo_cantidad" or cliente.paso_embudo == "confirmando_upsell":
-                    calculo = procesar_pedido_gorras(texto_cliente)
-                    if calculo:
-                        cantidad, subtotal, envio, total = calculo
-                        
-                        if cliente.paso_embudo == "pidiendo_cantidad" and 19 <= cantidad <= 23:
-                            respuesta = f"Noté que tienes en mente {cantidad} gorras. 💡 *Consejo corporativo:* Si ajustas tu pedido a **24 gorras**, se activa nuestro descuento de mayoreo (Q.18 c/u).\n\n"
-                            respuesta += "¡Llevarás más unidades por una inversión casi idéntica!\n\n"
-                            respuesta += f"👉 *Escribe '24' para aprovechar la oferta, o vuelve a escribir '{cantidad}' para confirmar tu cantidad inicial.*"
-                            
-                            await responder_bot(respuesta)
-                            cliente.paso_embudo = "confirmando_upsell"
-                            db.commit()
-                            return 
-                            
-                        str_subtotal = f"{subtotal:,.2f}"
-                        str_total = f"{total:,.2f}"
-                        
-                        pedido_existente = db.query(models.Pedido).filter(models.Pedido.cliente_id == cliente.id, models.Pedido.estatus == "EN PROCESO").first()
-                        if pedido_existente:
-                            pedido_existente.cantidad = cantidad
-                            pedido_existente.total_quetzales = total
-                        else:
-                            nuevo_pedido = models.Pedido(cliente_id=cliente.id, cantidad=cantidad, total_quetzales=total, estatus="EN PROCESO", link_logo="n/a")
-                            db.add(nuevo_pedido)
-                        
-                        respuesta = f"¡Excelente inversión! 🤝\n\n"
-                        respuesta += f"🧢 *Cantidad:* {cantidad} Gorras Trucker\n"
-                        respuesta += f"💰 *Total a Pagar:* Q. {str_total} *(Subtotal: Q.{str_subtotal} + Q.47.00 de envío a todo el país y pago contra-entrega)*\n\n"
-                        respuesta += "Ya tenemos la base de tu pedido asegurada. 🎯\n"
-                        respuesta += "Ahora, elijamos el lienzo perfecto para destacar tu marca. 🎨 Abre la imagen de arriba y descubre nuestros 16 colores disponibles (Frente blanco listos para tu logo / Malla de color):\n\n"
-                        respuesta += "🎩 *Los Clásicos:* Negro, Gris Oscuro, Gris Claro, Blanco Total, Café.\n"
-                        respuesta += "🔵 *Fríos y Frescos:* Marino, Azul Rey, Celeste, Verde, Pistache.\n"
-                        respuesta += "🔥 *Cálidos y Vibrantes:* Rojo, Corinto, Mango.\n"
-                        respuesta += "✨ *Creativos y Únicos:* Morado, Rosa Millenial, Fucsia.\n\n"
-                        respuesta += "👉 **¿Qué color representa mejor a tu marca?**\n*(Escribe tu color favorito aquí abajo para continuar 👇)*"
-                        
-                        link_catalogo = "https://crm-artie-backend-production.up.railway.app/static/colores.jpg"
-                        await responder_bot(respuesta, imagen_url=link_catalogo)
-                        
-                        cliente.paso_embudo = "pidiendo_color"
-                        db.commit()
-                    else:
-                        respuesta = "No logré entender la cantidad 😅. Por favor, escríbela con números (ej: 60, o 1 docena)."
-                        await responder_bot(respuesta)
+                # ==========================================================
+                # CEREBRO GEMINI IA ALSYS (REEMPLAZA AL MENÚ DE BOTONES)
+                # ==========================================================
+                try:
+                    # 1. Recuperar contexto histórico
+                    historial_db = db.query(models.Mensaje).filter(
+                        models.Mensaje.cliente_id == cliente.id
+                    ).order_by(models.Mensaje.id.desc()).limit(15).all()
+                    historial_db.reverse()
 
-                elif cliente.paso_embudo == "pidiendo_color":
-                    cliente.paso_embudo = "pidiendo_logo"
-                    db.commit()
-                    color_elegido = texto_cliente.title()
-                    respuesta = f"¡El {color_elegido} tiene muchísima presencia, se verá increíble! 🌟\n\n"
-                    respuesta += "Ya tenemos la cantidad y el color. Ahora necesitamos al protagonista: *Tu Marca.*\n"
-                    respuesta += "📸 Por favor, **envíame aquí mismo la imagen o foto de tu logo.**\n\n"
-                    respuesta += "*(Con tu imagen, nuestro equipo creará un \"Pre-diseño Digital\" totalmente GRATIS para que apruebes cómo se verán tus gorras antes de fabricarlas).*"
-                    await responder_bot(respuesta)
-                    
-                elif cliente.paso_embudo == "pidiendo_logo":
-                    if tipo_mensaje == "image" or "[media_id" in texto_cliente:
-                        respuesta = "✅ **¡Logo recibido y asegurado!** 🔐\nYa lo mandé a nuestra mesa de diseño.\n\nPara ir preparando tu orden de envío: **¿A nombre de quién registramos este súper pedido?** 👤"
-                        await responder_bot(respuesta)
-                        cliente.paso_embudo = "pidiendo_nombre"
+                    contexto = ""
+                    for msg in historial_db:
+                        rol = "Cliente" if msg.remitente == "cliente" else "Artie"
+                        texto = "Imagen/Logo adjunto por el cliente" if "http" in msg.contenido else msg.contenido
+                        contexto += f"{rol}: {texto}\n"
+
+                    # 2. Configurar motor
+                    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+
+                    # 3. ADN del Vendedor (Prompt Estricto)
+                    prompt = f"""
+                    Eres Artie, el vendedor estrella de Gorra Print (Guatemala). Eres amable, humano, súper rápido para responder y usas emojis.
+                    Tu objetivo es cerrar ventas de gorras trucker personalizadas.
+
+                    PRECIOS Y CANTIDADES (OBLIGATORIO):
+                    - 1 a 11 gorras: Q.25.00 c/u
+                    - 1 Docena (12 gorras): Q.280.00 total
+                    - 13 a 23 gorras: Q.23.50 c/u
+                    - 24 a 99 gorras: Q.18.00 c/u
+                    - 100 a 199 gorras: Q.17.00 c/u
+                    - 200 a 499 gorras: Q.16.00 c/u
+                    - 500+ gorras: Q.15.00 c/u
+
+                    ENVÍO: Siempre cobra Q.47.00 adicionales. Pago contra-entrega.
+                    COLORES: Negro, Gris Oscuro, Gris Claro, Blanco, Café, Marino, Azul Rey, Celeste, Verde, Pistache, Rojo, Corinto, Mango, Morado, Rosa Millenial, Fucsia.
+
+                    REGLAS ESTRICTAS DE ALSYS:
+                    1. NUNCA inventes precios. Calcula los totales multiplicando la cantidad por el precio unitario y súmale los Q.47 de envío.
+                    2. Responde SIEMPRE de forma conversacional, sin menús numéricos (olvida el presiona 1 o 2). Si el cliente dice "quiero 50 gorras rojas", tú respondes calculando el total y pidiendo el siguiente dato.
+                    3. Proceso para cerrar venta: Debes recolectar Cantidad, Color, pedir que te envíen la foto del Logo, pedir Nombre, Teléfono, NIT y Dirección de envío. Pídelos uno por uno conversando, no todos de golpe.
+                    4. Si el historial dice "Imagen/Logo adjunto", agradécele por el logo y continúa con la venta.
+                    5. GATILLO SECRETO: Cuando el cliente ya te haya dado TODOS los datos finales para su pedido, dale un resumen final amable y despídete. Al FINAL EXACTO de tu mensaje pon esta frase en mayúsculas: [ORDEN_COMPLETA].
+
+                    HISTORIAL DE CONVERSACIÓN ACTUAL:
+                    {contexto}
+
+                    Escribe la respuesta de Artie para el cliente basándote en el último mensaje del historial:
+                    """
+
+                    response = model.generate_content(prompt)
+                    respuesta_ia = response.text.strip()
+
+                    # Limpieza por si la IA agrega su nombre al inicio
+                    if respuesta_ia.startswith("Artie:"):
+                        respuesta_ia = respuesta_ia.replace("Artie:", "").strip()
+
+                    # 4. Evaluación del Gatillo Secreto
+                    if "[ORDEN_COMPLETA]" in respuesta_ia:
+                        respuesta_limpia = respuesta_ia.replace("[ORDEN_COMPLETA]", "").strip()
+                        await responder_bot(respuesta_limpia)
+
+                        # Apagar bot y enviar ficha al CRM
+                        cliente.bot_activo = False
+                        cliente.paso_embudo = "completado"
                         db.commit()
-                    else:
-                        respuesta = "Aún no detecto la imagen 🤔. Por favor, envíame la foto de tu logo."
-                        await responder_bot(respuesta)
-                        
-                elif cliente.paso_embudo == "pidiendo_nombre":
-                    nombre_pedido = texto_cliente.title()
-                    cliente.nombre = nombre_pedido
-                        
-                    respuesta = f"Un gusto saludarte, {nombre_pedido}. 🤝\n📞 **¿A qué número de teléfono te puede contactar nuestro equipo de mensajería para coordinar la entrega?**"
-                    await responder_bot(respuesta)
-                    cliente.paso_embudo = "pidiendo_telefono"
-                    db.commit()
-                    
-                elif cliente.paso_embudo == "pidiendo_telefono":
-                    numero_limpio = re.sub(r'\D', '', texto_cliente)
-                    if len(numero_limpio) == 8:
-                        respuesta = "Anotado. 📝\nY para tu comprobante, **¿Tienes algún número de NIT?** *(Si no tienes, solo escribe CF)*"
-                        await responder_bot(respuesta)
-                        cliente.paso_embudo = "pidiendo_nit"
+
+                        datos_ficha = {
+                            "tipo": "ficha_produccion",
+                            "cliente": cliente.nombre if cliente.nombre != "Pendiente" else cliente.telefono,
+                            "telefono": cliente.telefono,
+                            "nit": "Validar en chat",
+                            "direccion": "Validar en chat",
+                            "cantidad": "Ver Resumen IA",
+                            "total": "Ver Resumen IA",
+                            "logo_url": "n/a"
+                        }
+                        msg_sistema = models.Mensaje(cliente_id=cliente.id, remitente="sistema", tipo_mensaje="ficha", contenido=json.dumps(datos_ficha))
+                        db.add(msg_sistema)
                         db.commit()
+                        await manager.broadcast("nuevo_mensaje_recibido")
+
                     else:
-                        respuesta = "Por favor, escribe un número de teléfono válido de **8 dígitos**."
-                        await responder_bot(respuesta)
-                    
-                elif cliente.paso_embudo == "pidiendo_nit":
-                    cliente.nit = texto_cliente.upper()
-                    
-                    respuesta = "¡Todo en orden! 📍\nPor último, para que tu pedido llegue directo a la puerta de tu casa o negocio, **¿Cuál es tu dirección exacta de entrega?**\n*(No olvides incluir tu municipio y departamento)*"
-                    await responder_bot(respuesta)
-                    
-                    cliente.paso_embudo = "pidiendo_direccion"
-                    db.commit()
-                    
-                elif cliente.paso_embudo == "pidiendo_direccion":
-                    cliente.bot_activo = False
-                    cliente.paso_embudo = "completado"
-                    
-                    # 🔥 LA CORRECCIÓN: Buscamos explícitamente el pedido que se está cotizando ("EN PROCESO")
-                    pedido_actual = db.query(models.Pedido).filter(
-                        models.Pedido.cliente_id == cliente.id,
-                        models.Pedido.estatus == "EN PROCESO"
-                    ).first()
-                    
-                    if pedido_actual:
-                        pedido_actual.estatus = "NUEVO"
-                        
-                    db.commit()
-                    
-                    # 🔥 EL RECIBO DIGITAL PARA EL CLIENTE
-                    respuesta = f"🎉 **¡Tu pedido está en marcha, {cliente.nombre}!**\n\n"
-                    respuesta += "Aquí tienes el resumen oficial de tu orden para que todo quede súper claro:\n\n"
-                    respuesta += "🧾 **RESUMEN DE ORDEN:**\n"
-                    respuesta += f"👤 *A nombre de:* {cliente.nombre}\n"
-                    respuesta += f"🧢 *Cantidad:* {pedido_actual.cantidad if pedido_actual else 'N/A'} Gorras Trucker\n"
-                    respuesta += f"💰 *Total a Pagar:* Q. {pedido_actual.total_quetzales if pedido_actual else 'N/A'}\n"
-                    respuesta += f"📍 *Dirección:* {texto_cliente}\n"
-                    respuesta += f"📝 *NIT:* {cliente.nit}\n\n"
-                    respuesta += "📦 *Estado actual:* Orden registrada y enviada a mesa de diseño.\n"
-                    respuesta += "💳 *Método de Pago:* Pago contra-entrega (Pagas al recibir).\n\n"
-                    respuesta += "⏳ *Siguiente paso:* Un asesor humano de Gorra Print te escribirá en este mismo chat enviándote tu *Pre-diseño Digital* para tu aprobación final.\n\n"
-                    respuesta += "¡Gracias por confiar en *Gorra Print*! Estamos emocionados de trabajar en tu marca. 🧢🔥"
-                    await responder_bot(respuesta)
-                    
-                    # 🔥 LA MAGIA: LA FICHA DE PRODUCCIÓN EN SECRETO PARA EL CRM
-                    ultimo_logo = db.query(models.Mensaje).filter(
-                        models.Mensaje.cliente_id == cliente.id,
-                        models.Mensaje.remitente == "cliente",
-                        models.Mensaje.tipo_mensaje == "imagen"
-                    ).order_by(models.Mensaje.id.desc()).first()
-                    
-                    url_del_logo = ultimo_logo.contenido if ultimo_logo else "#"
-                    
-                    datos_ficha = {
-                        "tipo": "ficha_produccion",
-                        "cliente": cliente.nombre,
-                        "telefono": cliente.telefono,
-                        "nit": cliente.nit,
-                        "direccion": texto_cliente,
-                        "cantidad": pedido_actual.cantidad if pedido_actual else 0,
-                        "total": f"{pedido_actual.total_quetzales:,.2f}" if pedido_actual else "0.00",
-                        "logo_url": url_del_logo
-                    }
-                    
-                    msg_sistema = models.Mensaje(
-                        cliente_id=cliente.id, 
-                        remitente="sistema", 
-                        tipo_mensaje="ficha", 
-                        contenido=json.dumps(datos_ficha)
-                    )
-                    db.add(msg_sistema)
-                    db.commit()
+                        await responder_bot(respuesta_ia)
+
+                except Exception as e_ia:
+                    print(f"Error crítico en IA Gemini: {e_ia}", flush=True)
+                    await responder_bot("¡Uy! Estoy revisando unas cajas en bodega 📦 y el sistema está un poco lento. En un momento un humano te atiende con mucho gusto.")
+                # ==========================================================
                     
         except Exception as e:
             print(f"Error unificando flujo en background: {e}", flush=True)
