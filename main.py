@@ -487,7 +487,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     return 
                     
                 # ==========================================================
-                # CEREBRO GEMINI IA ALSYS (HEADER OFICIAL GOOGLE API KEY)
+                # CEREBRO GEMINI IA ALSYS (SISTEMA DE AUTO-DESCUBRIMIENTO)
                 # ==========================================================
                 try:
                     # 1. Recuperar contexto histórico
@@ -543,34 +543,59 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     Escribe la respuesta de Artie para el cliente basándote en el último mensaje del historial:
                     """
 
-                    # 2. Conexión Directa REST API (Usando el modelo oficial de produccion v1)
                     gemini_api_key = os.getenv("GEMINI_API_KEY")
-                    gemini_url = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent"
                     
-                    # 3. EL FIX DE AUTENTICACIÓN: La cabecera oficial de Google Cloud para llaves API
                     headers_ia = {
                         "x-goog-api-key": gemini_api_key,
                         "Content-Type": "application/json"
                     }
                     
-                    payload_ia = {
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "safetySettings": [
-                            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-                        ]
-                    }
-                    
                     async with httpx.AsyncClient() as client_ia:
+                        # PASO A: DESCUBRIR EL MODELO DISPONIBLE AUTOMÁTICAMENTE
+                        url_models = "https://generativelanguage.googleapis.com/v1/models"
+                        res_models = await client_ia.get(url_models, headers=headers_ia, timeout=15.0)
+                        
+                        if res_models.status_code != 200:
+                            print(f"Error al listar modelos: {res_models.text}", flush=True)
+                            raise Exception(f"Fallo al listar modelos: {res_models.status_code}")
+                            
+                        model_data = res_models.json()
+                        target_model = None
+                        
+                        # Buscar el primer modelo Gemini que soporte generar contenido de texto
+                        for m in model_data.get("models", []):
+                            name = m.get("name", "")
+                            methods = m.get("supportedGenerationMethods", [])
+                            if "gemini" in name.lower() and "generateContent" in methods:
+                                target_model = name
+                                break
+                                
+                        if not target_model:
+                            raise Exception("La API Key no tiene modelos Gemini habilitados.")
+                            
+                        print(f"✅ Modelo auto-seleccionado por el CRM: {target_model}", flush=True)
+
+                        # PASO B: ENVIAR LA PETICIÓN AL MODELO SEGURO
+                        gemini_url = f"https://generativelanguage.googleapis.com/v1/{target_model}:generateContent"
+                        
+                        payload_ia = {
+                            "contents": [{"parts": [{"text": prompt}]}],
+                            "safetySettings": [
+                                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+                            ]
+                        }
+                        
                         res_ia = await client_ia.post(gemini_url, headers=headers_ia, json=payload_ia, timeout=30.0)
+                        
                         if res_ia.status_code == 200:
                             data_ia = res_ia.json()
                             respuesta_ia = data_ia["candidates"][0]["content"]["parts"][0]["text"].strip()
                         else:
-                            print(f"Status Gemini: {res_ia.status_code}", flush=True)
-                            print(f"Respuesta Gemini: {res_ia.text}", flush=True)
+                            print(f"Status Gemini REST: {res_ia.status_code}", flush=True)
+                            print(f"Respuesta Gemini REST: {res_ia.text}", flush=True)
                             raise Exception(f"API Gemini REST falló con status {res_ia.status_code}")
 
                     # Limpieza por si la IA agrega su nombre al inicio
