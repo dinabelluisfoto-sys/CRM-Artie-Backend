@@ -509,9 +509,9 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                             texto = msg.contenido
                         contexto += f"{rol}: {texto}\n"
 
-                    # 2. Configurar motor
+                    # 2. Configurar motor - Usando el modelo de producción oficial
                     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-                    model = genai.GenerativeModel('gemini-3-flash-preview')
+                    model = genai.GenerativeModel('gemini-1.5-flash')
 
                     # 3. ADN del Vendedor (Prompt Estricto)
                     prompt = f"""
@@ -550,7 +550,16 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     Escribe la respuesta de Artie para el cliente basándote en el último mensaje del historial:
                     """
 
-                    response = model.generate_content(prompt)
+                    # Apagando los filtros de seguridad para poder procesar nombres y teléfonos sin que Google bloquee la respuesta
+                    response = model.generate_content(
+                        prompt,
+                        safety_settings=[
+                            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+                        ]
+                    )
                     respuesta_ia = response.text.strip()
 
                     # Limpieza por si la IA agrega su nombre al inicio
