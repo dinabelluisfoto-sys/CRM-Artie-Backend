@@ -505,7 +505,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
 
                     # 2. Configurar motor
                     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
                     # 3. ADN del Vendedor (Prompt Estricto)
                     prompt = f"""
