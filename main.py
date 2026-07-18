@@ -500,7 +500,13 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     contexto = ""
                     for msg in historial_db:
                         rol = "Cliente" if msg.remitente == "cliente" else "Artie"
-                        texto = "Imagen/Logo adjunto por el cliente" if "http" in msg.contenido else msg.contenido
+                        # FIX DE LOGO: Diferenciar entre imagenes del cliente y catalogos del bot
+                        if "http" in msg.contenido and msg.remitente == "cliente":
+                            texto = "[Imagen/Logo adjunto por el cliente]"
+                        elif "http" in msg.contenido and msg.remitente == "bot":
+                            texto = "[Catálogo visual enviado por Artie]"
+                        else:
+                            texto = msg.contenido
                         contexto += f"{rol}: {texto}\n"
 
                     # 2. Configurar motor
@@ -528,11 +534,11 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     1. NUNCA inventes precios. Calcula los totales multiplicando la cantidad por el precio unitario y súmale los Q.47 de envío.
                     2. Responde SIEMPRE de forma conversacional, sin menús numéricos (olvida el presiona 1 o 2). Si el cliente dice "quiero 50 gorras rojas", tú respondes calculando el total y pidiendo el siguiente dato.
                     3. Proceso para cerrar venta: Debes recolectar Cantidad, Color, pedir que te envíen la foto del Logo, pedir Nombre, Teléfono (OBLIGATORIO que sean exactamente 8 dígitos, si el cliente envía más o menos dígitos, dile amablemente que en Guatemala el número debe ser de 8 dígitos y vuelve a pedirlo), NIT y Dirección de envío. Pídelos uno por uno conversando, no todos de golpe.
-                    4. Si el historial dice "Imagen/Logo adjunto", agradécele por el logo y continúa con la venta.
+                    4. Si el historial dice "[Imagen/Logo adjunto por el cliente]", agradécele por el logo y continúa con la venta. No te confundas con los catálogos que tú mismo envías.
                     
-                    CONTROL DE IMÁGENES ALSYS (OBLIGATORIO):
-                    - Si el cliente te pide precios, o le quieres mostrar la escala de mayoreo, DEBES escribir al final exacto de tu mensaje la etiqueta: [ENVIAR_PRECIOS]
-                    - Si el cliente te pide ver colores, o le invitas a elegir un color, DEBES escribir al final exacto de tu mensaje la etiqueta: [ENVIAR_COLORES]
+                    CONTROL DE IMÁGENES ALSYS (REGLA DE ORO):
+                    - Si el cliente te pide precios por primera vez, DEBES escribir al final exacto de tu mensaje la etiqueta: [ENVIAR_PRECIOS]. ¡NO LO REPITAS si ya se lo enviaste antes!
+                    - Si el cliente te pide ver colores por primera vez, DEBES escribir al final exacto de tu mensaje la etiqueta: [ENVIAR_COLORES]. ¡NO LO REPITAS si ya se lo enviaste antes!
                     
                     5. GATILLO SECRETO: Cuando el cliente ya te haya dado TODOS los datos finales para su pedido (Cantidad, Color, Logo, Nombre, Teléfono, NIT y Dirección), dale un resumen final de su compra, infórmale expresamente que "en un breve momento un asesor humano le enviará su pre-diseño digital para su aprobación" y despídete amablemente. Al FINAL EXACTO de tu mensaje pon esta estructura estricta separada por el símbolo | :
                     [ORDEN_COMPLETA]|cantidad_en_numeros|total_a_pagar_en_numeros|NIT_del_cliente|direccion_del_cliente
