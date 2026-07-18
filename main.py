@@ -487,7 +487,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     return 
                     
                 # ==========================================================
-                # CEREBRO GEMINI IA ALSYS (NUEVA CONEXIÓN REST API PURA)
+                # CEREBRO GEMINI IA ALSYS (AUTENTICACIÓN BEARER 2026)
                 # ==========================================================
                 try:
                     # 1. Recuperar contexto histórico
@@ -543,9 +543,17 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     Escribe la respuesta de Artie para el cliente basándote en el último mensaje del historial:
                     """
 
-                    # 2. Conexión Directa REST API (Actualizada a v1 y gemini-2.5-flash)
+                    # 2. Conexión Directa REST API (Usando Bearer Token para la clave AQ. y el alias gemini-pro)
                     gemini_api_key = os.getenv("GEMINI_API_KEY")
-                    gemini_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={gemini_api_key}"
+                    
+                    # Eliminamos el ?key= de la URL para cumplir con los estándares de autenticación
+                    gemini_url = "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent"
+                    
+                    # Inyectamos tu clave AQ. como un Bearer Token
+                    headers_ia = {
+                        "Authorization": f"Bearer {gemini_api_key}",
+                        "Content-Type": "application/json"
+                    }
                     
                     payload_ia = {
                         "contents": [{"parts": [{"text": prompt}]}],
@@ -558,7 +566,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     }
                     
                     async with httpx.AsyncClient() as client_ia:
-                        res_ia = await client_ia.post(gemini_url, json=payload_ia, timeout=30.0)
+                        res_ia = await client_ia.post(gemini_url, headers=headers_ia, json=payload_ia, timeout=30.0)
                         if res_ia.status_code == 200:
                             data_ia = res_ia.json()
                             respuesta_ia = data_ia["candidates"][0]["content"]["parts"][0]["text"].strip()
