@@ -487,7 +487,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     return 
                     
                 # ==========================================================
-                # CEREBRO GEMINI IA ALSYS (AUTENTICACIÓN BEARER 2026)
+                # CEREBRO GEMINI IA ALSYS (HEADER OFICIAL GOOGLE API KEY)
                 # ==========================================================
                 try:
                     # 1. Recuperar contexto histórico
@@ -543,15 +543,13 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     Escribe la respuesta de Artie para el cliente basándote en el último mensaje del historial:
                     """
 
-                    # 2. Conexión Directa REST API (Usando Bearer Token para la clave AQ. y el alias gemini-pro)
+                    # 2. Conexión Directa REST API (Usando el modelo oficial de produccion v1)
                     gemini_api_key = os.getenv("GEMINI_API_KEY")
+                    gemini_url = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent"
                     
-                    # Eliminamos el ?key= de la URL para cumplir con los estándares de autenticación
-                    gemini_url = "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent"
-                    
-                    # Inyectamos tu clave AQ. como un Bearer Token
+                    # 3. EL FIX DE AUTENTICACIÓN: La cabecera oficial de Google Cloud para llaves API
                     headers_ia = {
-                        "Authorization": f"Bearer {gemini_api_key}",
+                        "x-goog-api-key": gemini_api_key,
                         "Content-Type": "application/json"
                     }
                     
