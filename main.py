@@ -489,7 +489,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     return 
                     
                 # ==========================================================
-                # CEREBRO GEMINI IA ALSYS (MIGRACIÓN A SDK OFICIAL google-genai)
+                # CEREBRO GEMINI IA ALSYS (SISTEMA DE FALLBACK AUTOMÁTICO)
                 # ==========================================================
                 try:
                     # 1. Recuperar contexto histórico
@@ -545,24 +545,49 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     Escribe la respuesta de Artie para el cliente basándote en el último mensaje del historial:
                     """
 
-                    # 2. Inicializar la SDK Oficial (Automáticamente maneja rutas, endpoints y la llave AQ.)
                     gemini_api_key = os.getenv("GEMINI_API_KEY")
                     client = genai.Client(api_key=gemini_api_key)
 
-                    response = client.models.generate_content(
-                        model='gemini-1.5-flash',
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            safety_settings=[
-                                types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
-                                types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
-                                types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
-                                types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
-                            ]
-                        )
-                    )
+                    respuesta_ia = None
+                    ultimo_error = None
                     
-                    respuesta_ia = response.text.strip()
+                    # 2. Lista de modelos por orden de prioridad
+                    modelos_prioridad = [
+                        "gemini-2.5-pro",
+                        "gemini-2.5-flash",
+                        "gemini-2.0-pro",
+                        "gemini-2.0-flash",
+                        "gemini-1.5-pro",
+                        "gemini-pro"
+                    ]
+
+                    # 3. Fuerza bruta: probar uno por uno hasta que Google acepte procesarlo
+                    for modelo_candidato in modelos_prioridad:
+                        try:
+                            print(f"⏳ Intentando conectar con modelo: {modelo_candidato}...", flush=True)
+                            response = client.models.generate_content(
+                                model=modelo_candidato,
+                                contents=prompt,
+                                config=types.GenerateContentConfig(
+                                    safety_settings=[
+                                        types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                                        types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                                        types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                                        types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+                                    ]
+                                )
+                            )
+                            respuesta_ia = response.text.strip()
+                            print(f"✅ ¡ÉXITO! Modelo {modelo_candidato} procesó el mensaje.", flush=True)
+                            break  # Salimos del bucle porque ya funcionó
+                            
+                        except Exception as e_modelo:
+                            ultimo_error = str(e_modelo)
+                            print(f"❌ Modelo {modelo_candidato} falló/bloqueado: {ultimo_error}", flush=True)
+                            continue # Ignoramos el error y saltamos al siguiente modelo
+                            
+                    if not respuesta_ia:
+                        raise Exception(f"Colapso total: Ningún modelo de la lista funcionó. Error final: {ultimo_error}")
 
                     # Limpieza por si la IA agrega su nombre al inicio
                     if respuesta_ia.startswith("Artie:"):
