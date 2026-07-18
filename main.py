@@ -574,7 +574,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
 
                 except Exception as e_ia:
                     print(f"Error crítico en IA Gemini: {e_ia}", flush=True)
-                    await responder_bot("¡Uy! Estoy revisando unas cajas en bodega 📦 y el sistema está un poco lento. En un momento un humano te atiende con mucho gusto.")
+                    await responder_bot("En este momento nuestro sistema está procesando un alto volumen de solicitudes. Por favor, permíteme un momento mientras uno de nuestros asesores toma este chat para brindarte atención personalizada. 🤝")
                 # ==========================================================
                     
         except Exception as e:
