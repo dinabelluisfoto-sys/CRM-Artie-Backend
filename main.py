@@ -1,7 +1,7 @@
 import os
 import asyncio
 import httpx
-import json # <-- NUEVO: Para crear la ficha fantasma
+import json
 from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from database import engine, get_db
 import models, schemas
 import shutil
-import google.generativeai as genai # <-- IMPORTACIÓN DE LA IA ALSYS
+import google.generativeai as genai
 
 os.makedirs("static/uploads", exist_ok=True)
 
@@ -488,7 +488,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     return 
                     
                 # ==========================================================
-                # CEREBRO GEMINI IA ALSYS (REEMPLAZA AL MENÚ DE BOTONES)
+                # CEREBRO GEMINI IA ALSYS 
                 # ==========================================================
                 try:
                     # 1. Recuperar contexto histórico
@@ -505,7 +505,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
 
                     # 2. Configurar motor
                     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-                    model = genai.GenerativeModel('gemini-3-flash-preview')
+                    model = genai.GenerativeModel('gemini-1.0-pro')
 
                     # 3. ADN del Vendedor (Prompt Estricto)
                     prompt = f"""
@@ -529,7 +529,14 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     2. Responde SIEMPRE de forma conversacional, sin menús numéricos (olvida el presiona 1 o 2). Si el cliente dice "quiero 50 gorras rojas", tú respondes calculando el total y pidiendo el siguiente dato.
                     3. Proceso para cerrar venta: Debes recolectar Cantidad, Color, pedir que te envíen la foto del Logo, pedir Nombre, Teléfono, NIT y Dirección de envío. Pídelos uno por uno conversando, no todos de golpe.
                     4. Si el historial dice "Imagen/Logo adjunto", agradécele por el logo y continúa con la venta.
-                    5. GATILLO SECRETO: Cuando el cliente ya te haya dado TODOS los datos finales para su pedido, dale un resumen final amable y despídete. Al FINAL EXACTO de tu mensaje pon esta frase en mayúsculas: [ORDEN_COMPLETA].
+                    
+                    CONTROL DE IMÁGENES ALSYS (OBLIGATORIO):
+                    - Si el cliente te pide precios, o le quieres mostrar la escala de mayoreo, DEBES escribir al final exacto de tu mensaje la etiqueta: [ENVIAR_PRECIOS]
+                    - Si el cliente te pide ver colores, o le invitas a elegir un color, DEBES escribir al final exacto de tu mensaje la etiqueta: [ENVIAR_COLORES]
+                    
+                    5. GATILLO SECRETO: Cuando el cliente ya te haya dado TODOS los datos finales para su pedido (Cantidad, Color, Logo, Nombre, Teléfono, NIT y Dirección), dale un resumen final amable y despídete. Al FINAL EXACTO de tu mensaje pon esta estructura estricta separada por el símbolo | :
+                    [ORDEN_COMPLETA]|cantidad_en_numeros|total_a_pagar_en_numeros|NIT_del_cliente|direccion_del_cliente
+                    Ejemplo exacto: [ORDEN_COMPLETA]|100|1747.00|CF|Quetzaltenango
 
                     HISTORIAL DE CONVERSACIÓN ACTUAL:
                     {contexto}
@@ -543,34 +550,70 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     # Limpieza por si la IA agrega su nombre al inicio
                     if respuesta_ia.startswith("Artie:"):
                         respuesta_ia = respuesta_ia.replace("Artie:", "").strip()
+                        
+                    # ---- DETECCIÓN DE IMÁGENES ALSYS ----
+                    url_adjunta = None
+                    if "[ENVIAR_PRECIOS]" in respuesta_ia:
+                        url_adjunta = "https://crm-artie-backend-production.up.railway.app/static/precios.jpg"
+                        respuesta_ia = respuesta_ia.replace("[ENVIAR_PRECIOS]", "").strip()
+                    
+                    if "[ENVIAR_COLORES]" in respuesta_ia:
+                        url_adjunta = "https://crm-artie-backend-production.up.railway.app/static/colores.jpg"
+                        respuesta_ia = respuesta_ia.replace("[ENVIAR_COLORES]", "").strip()
 
-                    # 4. Evaluación del Gatillo Secreto
+                    # 4. Evaluación del Gatillo Secreto y Extracción de Datos
                     if "[ORDEN_COMPLETA]" in respuesta_ia:
-                        respuesta_limpia = respuesta_ia.replace("[ORDEN_COMPLETA]", "").strip()
-                        await responder_bot(respuesta_limpia)
+                        
+                        partes = respuesta_ia.split("[ORDEN_COMPLETA]")
+                        mensaje_despedida = partes[0].strip()
+                        datos_ocultos = partes[1].strip() if len(partes) > 1 else ""
+                        
+                        cantidad_final = "Ver chat"
+                        total_final = "Ver chat"
+                        nit_final = "Validar en chat"
+                        direccion_final = "Validar en chat"
+                        
+                        if "|" in datos_ocultos:
+                            detalles = datos_ocultos.split("|")
+                            if len(detalles) >= 5:
+                                cantidad_final = detalles[1].strip()
+                                total_final = detalles[2].strip()
+                                nit_final = detalles[3].strip()
+                                direccion_final = detalles[4].strip()
+
+                        await responder_bot(mensaje_despedida, imagen_url=url_adjunta)
 
                         # Apagar bot y enviar ficha al CRM
                         cliente.bot_activo = False
                         cliente.paso_embudo = "completado"
                         db.commit()
+                        
+                        # Buscar el último logo enviado por el cliente para adjuntarlo a la ficha
+                        ultimo_logo = db.query(models.Mensaje).filter(
+                            models.Mensaje.cliente_id == cliente.id,
+                            models.Mensaje.remitente == "cliente",
+                            models.Mensaje.tipo_mensaje == "imagen"
+                        ).order_by(models.Mensaje.id.desc()).first()
+                        url_del_logo = ultimo_logo.contenido if ultimo_logo else "n/a"
 
                         datos_ficha = {
                             "tipo": "ficha_produccion",
                             "cliente": cliente.nombre if cliente.nombre != "Pendiente" else cliente.telefono,
                             "telefono": cliente.telefono,
-                            "nit": "Validar en chat",
-                            "direccion": "Validar en chat",
-                            "cantidad": "Ver Resumen IA",
-                            "total": "Ver Resumen IA",
-                            "logo_url": "n/a"
+                            "nit": nit_final,
+                            "direccion": direccion_final,
+                            "cantidad": cantidad_final,
+                            "total": f"Q. {total_final}",
+                            "logo_url": url_del_logo
                         }
+                        
                         msg_sistema = models.Mensaje(cliente_id=cliente.id, remitente="sistema", tipo_mensaje="ficha", contenido=json.dumps(datos_ficha))
                         db.add(msg_sistema)
                         db.commit()
                         await manager.broadcast("nuevo_mensaje_recibido")
 
                     else:
-                        await responder_bot(respuesta_ia)
+                        await responder_bot(respuesta_ia, imagen_url=url_adjunta)
 
                 except Exception as e_ia:
                     print(f"Error crítico en IA Gemini: {e_ia}", flush=True)
