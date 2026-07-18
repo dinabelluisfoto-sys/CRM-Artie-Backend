@@ -13,6 +13,8 @@ from pydantic import BaseModel
 from database import engine, get_db
 import models, schemas
 import shutil
+from google import genai
+from google.genai import types
 
 os.makedirs("static/uploads", exist_ok=True)
 
@@ -487,7 +489,7 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     return 
                     
                 # ==========================================================
-                # CEREBRO GEMINI IA ALSYS (SISTEMA DE AUTO-DESCUBRIMIENTO)
+                # CEREBRO GEMINI IA ALSYS (MIGRACIÓN A SDK OFICIAL google-genai)
                 # ==========================================================
                 try:
                     # 1. Recuperar contexto histórico
@@ -543,60 +545,24 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                     Escribe la respuesta de Artie para el cliente basándote en el último mensaje del historial:
                     """
 
+                    # 2. Inicializar la SDK Oficial (Automáticamente maneja rutas, endpoints y la llave AQ.)
                     gemini_api_key = os.getenv("GEMINI_API_KEY")
-                    
-                    headers_ia = {
-                        "x-goog-api-key": gemini_api_key,
-                        "Content-Type": "application/json"
-                    }
-                    
-                    async with httpx.AsyncClient() as client_ia:
-                        # PASO A: DESCUBRIR EL MODELO DISPONIBLE AUTOMÁTICAMENTE
-                        url_models = "https://generativelanguage.googleapis.com/v1/models"
-                        res_models = await client_ia.get(url_models, headers=headers_ia, timeout=15.0)
-                        
-                        if res_models.status_code != 200:
-                            print(f"Error al listar modelos: {res_models.text}", flush=True)
-                            raise Exception(f"Fallo al listar modelos: {res_models.status_code}")
-                            
-                        model_data = res_models.json()
-                        target_model = None
-                        
-                        # Buscar el primer modelo Gemini que soporte generar contenido de texto
-                        for m in model_data.get("models", []):
-                            name = m.get("name", "")
-                            methods = m.get("supportedGenerationMethods", [])
-                            if "gemini" in name.lower() and "generateContent" in methods:
-                                target_model = name
-                                break
-                                
-                        if not target_model:
-                            raise Exception("La API Key no tiene modelos Gemini habilitados.")
-                            
-                        print(f"✅ Modelo auto-seleccionado por el CRM: {target_model}", flush=True)
+                    client = genai.Client(api_key=gemini_api_key)
 
-                        # PASO B: ENVIAR LA PETICIÓN AL MODELO SEGURO
-                        gemini_url = f"https://generativelanguage.googleapis.com/v1/{target_model}:generateContent"
-                        
-                        payload_ia = {
-                            "contents": [{"parts": [{"text": prompt}]}],
-                            "safetySettings": [
-                                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+                    response = client.models.generate_content(
+                        model='gemini-1.5-flash',
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            safety_settings=[
+                                types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                                types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                                types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                                types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
                             ]
-                        }
-                        
-                        res_ia = await client_ia.post(gemini_url, headers=headers_ia, json=payload_ia, timeout=30.0)
-                        
-                        if res_ia.status_code == 200:
-                            data_ia = res_ia.json()
-                            respuesta_ia = data_ia["candidates"][0]["content"]["parts"][0]["text"].strip()
-                        else:
-                            print(f"Status Gemini REST: {res_ia.status_code}", flush=True)
-                            print(f"Respuesta Gemini REST: {res_ia.text}", flush=True)
-                            raise Exception(f"API Gemini REST falló con status {res_ia.status_code}")
+                        )
+                    )
+                    
+                    respuesta_ia = response.text.strip()
 
                     # Limpieza por si la IA agrega su nombre al inicio
                     if respuesta_ia.startswith("Artie:"):
@@ -730,5 +696,3 @@ async def enviar_imagen_whatsapp(numero_destino: str, link_imagen: str, caption:
                 print("Meta rechazó la imagen pero el flujo continúa:", response.text, flush=True)
     except Exception as img_err:
         print(f"Fallo de conexión al enviar imagen: {img_err}", flush=True)
-
-        
