@@ -509,9 +509,9 @@ async def recibir_mensajes(request: Request, background_tasks: BackgroundTasks):
                             texto = msg.contenido
                         contexto += f"{rol}: {texto}\n"
 
-                    # 2. Configurar motor - Usando el modelo de producción oficial 2026
+                    # 2. Configurar motor - Alias universal para librería legacy
                     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-                    model = genai.GenerativeModel('gemini-3.5-flash')
+                    model = genai.GenerativeModel('gemini-pro')
 
                     # 3. ADN del Vendedor (Prompt Estricto)
                     prompt = f"""
